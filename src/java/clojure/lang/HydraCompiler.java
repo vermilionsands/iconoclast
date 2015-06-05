@@ -23,7 +23,7 @@ import java.util.*;
 import java.util.regex.Pattern;
 import java.util.regex.Matcher;
 
-public class Compiler implements Opcodes {
+public class HydraCompiler implements Opcodes {
 
   static final Symbol DEF = Symbol.intern("def");
   static final Symbol LOOP = Symbol.intern("loop*");
@@ -46,6 +46,7 @@ public class Compiler implements Opcodes {
   static final Symbol MONITOR_EXIT = Symbol.intern("monitor-exit");
   static final Symbol IMPORT = Symbol.intern("clojure.core", "import*");
   static final Symbol DEFTYPE = Symbol.intern("deftype*");
+  static final Symbol DEFCLASS = Symbol.intern("defclass*");
   static final Symbol CASE = Symbol.intern("case*");
   static final Symbol CLASS = Symbol.intern("Class");
   static final Symbol NEW = Symbol.intern("new");
@@ -73,6 +74,18 @@ public class Compiler implements Opcodes {
   static final Keyword onKey = Keyword.intern(null, "on");
   static Keyword dynamicKey = Keyword.intern("dynamic");
 
+  //access keywords
+  public static final Keyword ACCESS_PUBLIC_FLAG = Keyword.intern(null, "public");
+  public static final Keyword ACCESS_NONFINAL_FLAG = Keyword.intern(null, "nonfinal");  //instead of final
+  public static final Keyword ACCESS_FINAL_FLAG = Keyword.intern(null, "final");
+  public static final Keyword ACCESS_PRIVATE_FLAG = Keyword.intern(null, "private");
+  public static final Keyword ACCESS_PROTECTED_FLAG = Keyword.intern(null, "protected");
+  public static final Keyword ACCESS_ABSTRACT_FLAG = Keyword.intern(null, "abstract");
+  public static final Keyword ACCESS_STATIC_FLAG = Keyword.intern(null, "static");
+  //TODO remove duplicated calls, use statics
+  public static final Keyword ACCESS_VOLATILE_MUTABLE = Keyword.intern(null, "volatile-mutable");
+  public static final Keyword ACCESS_UNSYNC_MUTABLE = Keyword.intern(null, "unsynchronized-mutable");
+  
   //TODO remove unused
   // static final Symbol TRY_FINALLY = Symbol.intern("try-finally");
   // static final Symbol INSTANCE = Symbol.intern("instance?");
@@ -100,6 +113,7 @@ public class Compiler implements Opcodes {
       DOT, new HostExpr.Parser(), 
       ASSIGN, new AssignExpr.Parser(), 
       DEFTYPE, new NewInstanceExpr.DeftypeParser(), 
+      DEFCLASS, new NewInstanceExpr.DefclassParser(),
       REIFY, new NewInstanceExpr.ReifyParser(),
       TRY, new TryExpr.Parser(), 
       THROW, new ThrowExpr.Parser(), 
@@ -293,6 +307,12 @@ public class Compiler implements Opcodes {
     EXPRESSION, // value required
     RETURN, // tail position relative to enclosing recur frame
     EVAL
+  }
+  
+  public enum ObjExprType {
+    DEFTYPE,
+    DEFCLASS,
+    OTHER
   }
 
   private class Recur {
@@ -1104,8 +1124,7 @@ public class Compiler implements Opcodes {
       if (targetClass != null && field != null) {
         target.emit(C.EXPRESSION, objx, gen);
         gen.checkCast(getType(targetClass));
-        gen.getField(getType(targetClass), fieldName,
-            Type.getType(field.getType()));
+        gen.getField(getType(targetClass), fieldName, Type.getType(field.getType()));
       } else
         throw new UnsupportedOperationException(
             "Unboxed emit of unknown member");
@@ -1116,8 +1135,7 @@ public class Compiler implements Opcodes {
       if (targetClass != null && field != null) {
         target.emit(C.EXPRESSION, objx, gen);
         gen.checkCast(getType(targetClass));
-        gen.getField(getType(targetClass), fieldName,
-            Type.getType(field.getType()));
+        gen.getField(getType(targetClass), fieldName, Type.getType(field.getType()));
         // if(context != C.STATEMENT)
         HostExpr.emitBoxReturn(objx, gen, field.getType());
         if (context == C.STATEMENT) {
@@ -1145,17 +1163,17 @@ public class Compiler implements Opcodes {
       return Reflector.setInstanceField(target.eval(), fieldName, val.eval());
     }
 
+    //Added fix from CLJ-1226
     public void emitAssign(C context, ObjExpr objx, GeneratorAdapter gen,
         Expr val) {
       gen.visitLineNumber(line, gen.mark());
       if (targetClass != null && field != null) {
         target.emit(C.EXPRESSION, objx, gen);
-        gen.checkCast(Type.getType(targetClass));
+        gen.checkCast(getType(targetClass));
         val.emit(C.EXPRESSION, objx, gen);
         gen.dupX1();
         HostExpr.emitUnboxArg(objx, gen, field.getType());
-        gen.putField(Type.getType(targetClass), fieldName,
-            Type.getType(field.getType()));
+        gen.putField(getType(targetClass), fieldName, Type.getType(field.getType()));
       } else {
         target.emit(C.EXPRESSION, objx, gen);
         gen.push(fieldName);
@@ -3809,6 +3827,10 @@ public class Compiler implements Opcodes {
     protected IPersistentMap classMeta;
     protected boolean isStatic;
 
+    ObjExprType exprType;
+    int classAccess;
+    boolean skipDefaultCtors;
+    
     public final String name() {
       return name;
     }
@@ -3900,17 +3922,61 @@ public class Compiler implements Opcodes {
           .vector(IPERSISTENTMAP_TYPE);
       for (ISeq s = RT.keys(closes); s != null; s = s.next()) {
         LocalBinding lb = (LocalBinding) s.first();
-        if (lb.getPrimitiveType() != null)
-          tv = tv.cons(Type.getType(lb.getPrimitiveType()));
-        else
-          tv = tv.cons(OBJECT_TYPE);
+        //skip statics
+        if (lb.sym.meta() == null || !lb.sym.meta().containsKey(ACCESS_STATIC_FLAG)) {
+          if (lb.getPrimitiveType() != null) {
+            tv = tv.cons(Type.getType(lb.getPrimitiveType()));
+          } else {
+            tv = tv.cons(getTagType(internalName, isDefclass(), lb));
+          }
+        }
       }
       Type[] ret = new Type[tv.count()];
       for (int i = 0; i < tv.count(); i++)
         ret[i] = (Type) tv.nth(i);
       return ret;
     }
-
+        
+    Type[] ctorTypes(ISeq params, boolean matchWithCloses) {
+      IPersistentVector tv = PersistentVector.EMPTY;
+      IPersistentMap m = PersistentHashMap.EMPTY;
+      for (ISeq s = RT.keys(closes); s != null; s = s.next()) {
+        LocalBinding lb = (LocalBinding) s.first();
+        m = m.assoc(lb.name, lb);
+      }
+      for (ISeq s = params; s != null; s = s.next()) {
+        Symbol param = (Symbol) s.first();
+        if (matchWithCloses) {
+          if (m.containsKey(param.name)) {
+            LocalBinding lb = (LocalBinding)RT.get(m, param.name);
+            if (lb.getPrimitiveType() != null) {
+              tv = tv.cons(Type.getType(lb.getPrimitiveType()));
+            } else {
+              tv = tv.cons(getTagType(internalName, isDefclass(), lb));
+            }
+          }  
+        } else {
+          Type t = OBJECT_TYPE;
+          if (param.meta() != null) {
+            Symbol hint = (Symbol)RT.get(param.meta(), Keyword.intern("tag"));
+            if (hint != null) {
+              if (internalNameFromType(hint.name).equals(internalName)) {
+                t = tagType(hint);
+              } else {
+                t = Type.getType(HostExpr.tagToClass(hint));
+              }
+            }
+          } 
+          tv = tv.cons(t);
+        }
+        
+      }
+      Type[] ret = new Type[tv.count()];
+      for (int i = 0; i < tv.count(); i++)
+        ret[i] = (Type) tv.nth(i);
+      return ret;
+    }
+    
     void compile(String superName, String[] interfaceNames, boolean oneTimeUse)
         throws IOException {
       // create bytecode for a class
@@ -3918,14 +3984,13 @@ public class Compiler implements Opcodes {
       // anonymous fns get names fn__id
       // derived from AFn/RestFn
       ClassWriter cw = new ClassWriter(ClassWriter.COMPUTE_MAXS);
-      // ClassWriter cw = new ClassWriter(0);
       ClassVisitor cv = cw;
       // ClassVisitor cv = new TraceClassVisitor(new
       // CheckClassAdapter(cw), new PrintWriter(System.out));
       // ClassVisitor cv = new TraceClassVisitor(cw, new
       // PrintWriter(System.out));
-      cv.visit(V1_5, ACC_PUBLIC + ACC_SUPER + ACC_FINAL, internalName, null,
-          superName, interfaceNames);
+      int classAccess = (isDefclass() && this.classAccess != 0) ? this.classAccess : (ACC_PUBLIC + ACC_SUPER + ACC_FINAL);
+      cv.visit(V1_5, classAccess, internalName, null, superName, interfaceNames);
       // superName != null ? superName :
       // (isVariadic() ? "clojure/lang/RestFn" :
       // "clojure/lang/AFunction"), null);
@@ -4021,22 +4086,25 @@ public class Compiler implements Opcodes {
       for (ISeq s = RT.keys(closes); s != null; s = s.next()) {
         LocalBinding lb = (LocalBinding) s.first();
         if (isDeftype()) {
-          int access = isVolatile(lb) ? ACC_VOLATILE : isMutable(lb) ? 0
-              : (ACC_PUBLIC + ACC_FINAL);
+          int access = isVolatile(lb) ? ACC_VOLATILE : isMutable(lb) ? 0 : (ACC_PUBLIC + ACC_FINAL);
+          if (isDefclass()) {
+            access = getFieldModifiersCodesSum(lb.sym);
+          }
           FieldVisitor fv;
-          if (lb.getPrimitiveType() != null)
+          if (lb.getPrimitiveType() != null) {
             fv = cv
                 .visitField(access, lb.name, Type
                     .getType(lb.getPrimitiveType()).getDescriptor(), null, null);
-          else
+          } else {
+            String desc = getTagType(internalName, isDefclass(), lb).getDescriptor();   
             // todo - when closed-overs are fields, use more specific types here
             // and in ctor and emitLocal?
-            fv = cv.visitField(access, lb.name, OBJECT_TYPE.getDescriptor(),
-                null, null);
+            fv = cv.visitField(access, lb.name, desc, null, null);
+          }
           addAnnotation(fv, RT.meta(lb.sym));
         } else {
-          // todo - only enable this non-private+writability for letfns where we
-          // need it
+          // todo - only enable this non-private+writability for
+          // letfns where we need it
           if (lb.getPrimitiveType() != null)
             cv.visitField(0 + (isVolatile(lb) ? ACC_VOLATILE : 0), lb.name,
                 Type.getType(lb.getPrimitiveType()).getDescriptor(), null, null);
@@ -4052,142 +4120,154 @@ public class Compiler implements Opcodes {
             CLASS_TYPE.getDescriptor(), null, null);
       }
 
-      // ctor that takes closed-overs and inits base + fields
-      Method m = new Method("<init>", Type.VOID_TYPE, ctorTypes());
-      GeneratorAdapter ctorgen = new GeneratorAdapter(ACC_PUBLIC, m, null,
-          null, cv);
-      Label start = ctorgen.newLabel();
-      Label end = ctorgen.newLabel();
-      ctorgen.visitCode();
-      ctorgen.visitLineNumber(line, ctorgen.mark());
-      ctorgen.visitLabel(start);
-      ctorgen.loadThis();
-      // if(superName != null)
-      ctorgen.invokeConstructor(Type.getObjectType(superName), voidctor);
-      // else if(isVariadic()) //RestFn ctor takes reqArity arg
-      // {
-      // ctorgen.push(variadicMethod.reqParms.count());
-      // ctorgen.invokeConstructor(restFnType, restfnctor);
-      // }
-      // else
-      // ctorgen.invokeConstructor(aFnType, voidctor);
-
-      // if(vars.count() > 0)
-      // {
-      // ctorgen.loadThis();
-      // ctorgen.getStatic(VAR_TYPE,"rev",Type.INT_TYPE);
-      // ctorgen.push(-1);
-      // ctorgen.visitInsn(Opcodes.IADD);
-      // ctorgen.putField(objtype, "__varrev__", Type.INT_TYPE);
-      // }
-
-      if (supportsMeta()) {
-        ctorgen.loadThis();
-        ctorgen.visitVarInsn(IPERSISTENTMAP_TYPE.getOpcode(Opcodes.ILOAD), 1);
-        ctorgen.putField(objtype, "__meta", IPERSISTENTMAP_TYPE);
-      }
-
-      int a = supportsMeta() ? 2 : 1;
-      for (ISeq s = RT.keys(closes); s != null; s = s.next(), ++a) {
-        LocalBinding lb = (LocalBinding) s.first();
-        ctorgen.loadThis();
-        Class primc = lb.getPrimitiveType();
-        if (primc != null) {
-          ctorgen.visitVarInsn(Type.getType(primc).getOpcode(Opcodes.ILOAD), a);
-          ctorgen.putField(objtype, lb.name, Type.getType(primc));
-          if (primc == Long.TYPE || primc == Double.TYPE)
-            ++a;
-        } else {
-          ctorgen.visitVarInsn(OBJECT_TYPE.getOpcode(Opcodes.ILOAD), a);
-          ctorgen.putField(objtype, lb.name, OBJECT_TYPE);
-        }
-        closesExprs = closesExprs.cons(new LocalBindingExpr(lb, null));
-      }
-
-      ctorgen.visitLabel(end);
-
-      ctorgen.returnValue();
-
-      ctorgen.endMethod();
-
-      if (altCtorDrops > 0) {
+      if (!skipDefaultCtors) { 
+        //default ctor generation
+        //TODO move to separate methods or something to make more readable
+        
         // ctor that takes closed-overs and inits base + fields
-        Type[] ctorTypes = ctorTypes();
-        Type[] altCtorTypes = new Type[ctorTypes.length - altCtorDrops];
-        for (int i = 0; i < altCtorTypes.length; i++)
-          altCtorTypes[i] = ctorTypes[i];
-        Method alt = new Method("<init>", Type.VOID_TYPE, altCtorTypes);
-        ctorgen = new GeneratorAdapter(ACC_PUBLIC, alt, null, null, cv);
-        ctorgen.visitCode();
-        ctorgen.loadThis();
-        ctorgen.loadArgs();
-        for (int i = 0; i < altCtorDrops; i++)
-          ctorgen.visitInsn(Opcodes.ACONST_NULL);
-
-        ctorgen.invokeConstructor(objtype, new Method("<init>", Type.VOID_TYPE,
-            ctorTypes));
-
-        ctorgen.returnValue();
-        ctorgen.endMethod();
-      }
-
-      if (supportsMeta()) {
-        // ctor that takes closed-overs but not meta
-        Type[] ctorTypes = ctorTypes();
-        Type[] noMetaCtorTypes = new Type[ctorTypes.length - 1];
-        for (int i = 1; i < ctorTypes.length; i++)
-          noMetaCtorTypes[i - 1] = ctorTypes[i];
-        Method alt = new Method("<init>", Type.VOID_TYPE, noMetaCtorTypes);
-        ctorgen = new GeneratorAdapter(ACC_PUBLIC, alt, null, null, cv);
-        ctorgen.visitCode();
-        ctorgen.loadThis();
-        ctorgen.visitInsn(Opcodes.ACONST_NULL); // null meta
-        ctorgen.loadArgs();
-        ctorgen.invokeConstructor(objtype, new Method("<init>", Type.VOID_TYPE,
-            ctorTypes));
-
-        ctorgen.returnValue();
-        ctorgen.endMethod();
-
-        // meta()
-        Method meth = Method.getMethod("clojure.lang.IPersistentMap meta()");
-
-        GeneratorAdapter gen = new GeneratorAdapter(ACC_PUBLIC, meth, null,
+        Method m = new Method("<init>", Type.VOID_TYPE, ctorTypes());
+        GeneratorAdapter ctorgen = new GeneratorAdapter(ACC_PUBLIC, m, null,
             null, cv);
-        gen.visitCode();
-        gen.loadThis();
-        gen.getField(objtype, "__meta", IPERSISTENTMAP_TYPE);
-
-        gen.returnValue();
-        gen.endMethod();
-
-        // withMeta()
-        meth = Method
-            .getMethod("clojure.lang.IObj withMeta(clojure.lang.IPersistentMap)");
-
-        gen = new GeneratorAdapter(ACC_PUBLIC, meth, null, null, cv);
-        gen.visitCode();
-        gen.newInstance(objtype);
-        gen.dup();
-        gen.loadArg(0);
-
+        Label start = ctorgen.newLabel();
+        Label end = ctorgen.newLabel();
+        ctorgen.visitCode();
+        ctorgen.visitLineNumber(line, ctorgen.mark());
+        ctorgen.visitLabel(start);
+        ctorgen.loadThis();
+        // if(superName != null)
+        ctorgen.invokeConstructor(Type.getObjectType(superName), voidctor);
+        // else if(isVariadic()) //RestFn ctor takes reqArity arg
+        // {
+        // ctorgen.push(variadicMethod.reqParms.count());
+        // ctorgen.invokeConstructor(restFnType, restfnctor);
+        // }
+        // else
+        // ctorgen.invokeConstructor(aFnType, voidctor);
+  
+        // if(vars.count() > 0)
+        // {
+        // ctorgen.loadThis();
+        // ctorgen.getStatic(VAR_TYPE,"rev",Type.INT_TYPE);
+        // ctorgen.push(-1);
+        // ctorgen.visitInsn(Opcodes.IADD);
+        // ctorgen.putField(objtype, "__varrev__", Type.INT_TYPE);
+        // }
+  
+        if (supportsMeta()) {
+          ctorgen.loadThis();
+          ctorgen.visitVarInsn(IPERSISTENTMAP_TYPE.getOpcode(Opcodes.ILOAD), 1);
+          ctorgen.putField(objtype, "__meta", IPERSISTENTMAP_TYPE);
+        }
+  
+        int a = supportsMeta() ? 2 : 1;
         for (ISeq s = RT.keys(closes); s != null; s = s.next(), ++a) {
           LocalBinding lb = (LocalBinding) s.first();
-          gen.loadThis();
+          if (lb.sym.meta() != null && lb.sym.meta().containsKey(ACCESS_STATIC_FLAG)) {
+            --a;
+            continue;
+          }
+          ctorgen.loadThis();
           Class primc = lb.getPrimitiveType();
           if (primc != null) {
-            gen.getField(objtype, lb.name, Type.getType(primc));
+            ctorgen.visitVarInsn(Type.getType(primc).getOpcode(Opcodes.ILOAD), a);
+            ctorgen.putField(objtype, lb.name, Type.getType(primc));
+            if (primc == Long.TYPE || primc == Double.TYPE)
+              ++a;
           } else {
-            gen.getField(objtype, lb.name, OBJECT_TYPE);
+            Type t = isDefclass() ? Type.getType(lb.getJavaClass()) : OBJECT_TYPE;
+            ctorgen.visitVarInsn(t.getOpcode(Opcodes.ILOAD), a);
+            ctorgen.putField(objtype, lb.name, t);
           }
+          closesExprs = closesExprs.cons(new LocalBindingExpr(lb, null));
         }
-
-        gen.invokeConstructor(objtype, new Method("<init>", Type.VOID_TYPE,
-            ctorTypes));
-        gen.returnValue();
-        gen.endMethod();
+  
+        ctorgen.visitLabel(end);
+  
+        ctorgen.returnValue();
+  
+        ctorgen.endMethod();
+  
+        if (altCtorDrops > 0) {
+          // ctor that takes closed-overs and inits base + fields
+          Type[] ctorTypes = ctorTypes();
+          Type[] altCtorTypes = new Type[ctorTypes.length - altCtorDrops];
+          for (int i = 0; i < altCtorTypes.length; i++)
+            altCtorTypes[i] = ctorTypes[i];
+          Method alt = new Method("<init>", Type.VOID_TYPE, altCtorTypes);
+          ctorgen = new GeneratorAdapter(ACC_PUBLIC, alt, null, null, cv);
+          ctorgen.visitCode();
+          ctorgen.loadThis();
+          ctorgen.loadArgs();
+          for (int i = 0; i < altCtorDrops; i++)
+            ctorgen.visitInsn(Opcodes.ACONST_NULL);
+  
+          ctorgen.invokeConstructor(objtype, new Method("<init>", Type.VOID_TYPE,
+              ctorTypes));
+  
+          ctorgen.returnValue();
+          ctorgen.endMethod();
+        }
+  
+        if (supportsMeta()) {
+          // ctor that takes closed-overs but not meta
+          Type[] ctorTypes = ctorTypes();
+          Type[] noMetaCtorTypes = new Type[ctorTypes.length - 1];
+          for (int i = 1; i < ctorTypes.length; i++)
+            noMetaCtorTypes[i - 1] = ctorTypes[i];
+          Method alt = new Method("<init>", Type.VOID_TYPE, noMetaCtorTypes);
+          ctorgen = new GeneratorAdapter(ACC_PUBLIC, alt, null, null, cv);
+          ctorgen.visitCode();
+          ctorgen.loadThis();
+          ctorgen.visitInsn(Opcodes.ACONST_NULL); // null meta
+          ctorgen.loadArgs();
+          ctorgen.invokeConstructor(objtype, new Method("<init>", Type.VOID_TYPE,
+              ctorTypes));
+  
+          ctorgen.returnValue();
+          ctorgen.endMethod();
+  
+          // meta()
+          Method meth = Method.getMethod("clojure.lang.IPersistentMap meta()");
+  
+          GeneratorAdapter gen = new GeneratorAdapter(ACC_PUBLIC, meth, null,
+              null, cv);
+          gen.visitCode();
+          gen.loadThis();
+          gen.getField(objtype, "__meta", IPERSISTENTMAP_TYPE);
+  
+          gen.returnValue();
+          gen.endMethod();
+  
+          // withMeta()
+          meth = Method
+              .getMethod("clojure.lang.IObj withMeta(clojure.lang.IPersistentMap)");
+  
+          gen = new GeneratorAdapter(ACC_PUBLIC, meth, null, null, cv);
+          gen.visitCode();
+          gen.newInstance(objtype);
+          gen.dup();
+          gen.loadArg(0);
+  
+          for (ISeq s = RT.keys(closes); s != null; s = s.next(), ++a) {
+            LocalBinding lb = (LocalBinding) s.first();
+            gen.loadThis();
+            Class primc = lb.getPrimitiveType();
+            if (primc != null) {
+              gen.getField(objtype, lb.name, Type.getType(primc));
+            } else {
+              gen.getField(objtype, lb.name, OBJECT_TYPE);
+            }
+          }
+  
+          gen.invokeConstructor(objtype, new Method("<init>", Type.VOID_TYPE,
+              ctorTypes));
+          gen.returnValue();
+          gen.endMethod();
+        }
+      } else {
+        emitCtors(cv);
       }
-
+        
       emitStatics(cv);
       emitMethods(cv);
 
@@ -4251,6 +4331,9 @@ public class Compiler implements Opcodes {
     }
 
     protected void emitMethods(ClassVisitor gen) {
+    }
+    
+    protected void emitCtors(ClassVisitor gen) {
     }
 
     void emitListAsObjectArray(Object value, GeneratorAdapter gen) {
@@ -4471,9 +4554,22 @@ public class Compiler implements Opcodes {
           && RT.booleanCast(RT.get(lb.sym.meta(),
               Keyword.intern("volatile-mutable")));
     }
+    
+    //maybe both could be changed to Modifer/isStatic, isAbstract from calculated opcodes
+    boolean isStatic(Symbol s) {
+      return isDefclass() && RT.booleanCast(RT.get(s.meta(), ACCESS_STATIC_FLAG));
+    }
+    
+    boolean isAbstract(Symbol s) {
+      return isDefclass() && RT.booleanCast(RT.get(s.meta(), ACCESS_ABSTRACT_FLAG));
+    }
 
     boolean isDeftype() {
       return fields != null;
+    }
+    
+    boolean isDefclass() {
+      return ObjExprType.DEFCLASS.equals(exprType);
     }
 
     boolean supportsMeta() {
@@ -4578,38 +4674,70 @@ public class Compiler implements Opcodes {
     }
 
     public void emitAssignLocal(GeneratorAdapter gen, LocalBinding lb, Expr val) {
-      if (!isMutable(lb))
-        throw new IllegalArgumentException("Cannot assign to non-mutable: "
-            + lb.name);
+      if (!isMutable(lb) && !lb.skipMutableChecks) {
+        throw new IllegalArgumentException("Cannot assign to non-mutable: " + lb.name);
+      }
+      lb.skipMutableChecks = false;
       Class primc = lb.getPrimitiveType();
-      gen.loadThis();
+      boolean isLbStatic = isStatic(lb.sym);
+      //can load only when not static
+      if (!isLbStatic) {
+        gen.loadThis();
+      } 
       if (primc != null) {
-        if (!(val instanceof MaybePrimitiveExpr && ((MaybePrimitiveExpr) val)
-            .canEmitPrimitive()))
-          throw new IllegalArgumentException(
-              "Must assign primitive to primitive mutable: " + lb.name);
+        if (!(val instanceof MaybePrimitiveExpr && ((MaybePrimitiveExpr) val).canEmitPrimitive())) {
+          throw new IllegalArgumentException("Must assign primitive to primitive mutable: " + lb.name);
+        }
         MaybePrimitiveExpr me = (MaybePrimitiveExpr) val;
         me.emitUnboxed(C.EXPRESSION, this, gen);
-        gen.putField(objtype, lb.name, Type.getType(primc));
+        if (!isLbStatic) {
+          gen.putField(objtype, lb.name, Type.getType(primc));
+        } else {
+          gen.putStatic(objtype, lb.name, Type.getType(primc));
+        }
       } else {
+        Type t = getTagType(internalName, isDefclass(), lb);
         val.emit(C.EXPRESSION, this, gen);
-        gen.putField(objtype, lb.name, OBJECT_TYPE);
+        if (t != OBJECT_TYPE) {
+          gen.checkCast(t);
+        }
+        
+        if (!isLbStatic) {
+          gen.putField(objtype, lb.name, t);
+        } else {
+          gen.putStatic(objtype, lb.name, t);
+        }
       }
     }
 
     private void emitLocal(GeneratorAdapter gen, LocalBinding lb, boolean clear) {
       if (closes.containsKey(lb)) {
         Class primc = lb.getPrimitiveType();
-        gen.loadThis();
+        boolean isLbStatic = isStatic(lb.sym);
+        if (!isLbStatic) {
+          gen.loadThis();
+        } 
         if (primc != null) {
-          gen.getField(objtype, lb.name, Type.getType(primc));
+          if (!isLbStatic) {
+            gen.getField(objtype, lb.name, Type.getType(primc));
+          } else {
+            gen.getStatic(objtype, lb.name, Type.getType(primc));
+          }
           HostExpr.emitBoxReturn(this, gen, primc);
         } else {
-          gen.getField(objtype, lb.name, OBJECT_TYPE);
+          Type t = getTagType(internalName, isDefclass(), lb);
+
+          if (!isLbStatic) {
+            gen.getField(objtype, lb.name, t);
+          } else {
+            gen.getStatic(objtype, lb.name, t);
+          }
+          
+          //should this be also changed to putStatic?
           if (onceOnly && clear && lb.canBeCleared) {
             gen.loadThis();
             gen.visitInsn(Opcodes.ACONST_NULL);
-            gen.putField(objtype, lb.name, OBJECT_TYPE);
+            gen.putField(objtype, lb.name, t);
           }
         }
       } else {
@@ -4653,8 +4781,12 @@ public class Compiler implements Opcodes {
       int argoff = isStatic ? 0 : 1;
       Class primc = lb.getPrimitiveType();
       if (closes.containsKey(lb)) {
-        gen.loadThis();
-        gen.getField(objtype, lb.name, Type.getType(primc));
+        if (!isStatic(lb.sym)) {
+          gen.loadThis();
+          gen.getField(objtype, lb.name, Type.getType(primc));
+        } else {
+          gen.getStatic(objtype, lb.name, Type.getType(primc));
+        }
       } else if (lb.isArg)
         gen.loadArg(lb.idx - argoff);
       else
@@ -5163,6 +5295,7 @@ public class Compiler implements Opcodes {
     int column;
     PersistentHashSet localsUsedInCatchFinally = PersistentHashSet.EMPTY;
     protected IPersistentMap methodMeta;
+    boolean skipCode;
 
     public final IPersistentMap locals() {
       return locals;
@@ -5228,7 +5361,13 @@ public class Compiler implements Opcodes {
           gen.unbox(Type.getType(retClass));
       }
     }
-
+    
+    static void emitBody(ObjExpr objx, GeneratorAdapter gen, Type retType, Expr body) {
+      //only when retClass does not exists yet
+      body.emit(C.RETURN, objx, gen);
+      gen.unbox(retType);
+    }
+    
     abstract int numParams();
 
     abstract String getMethodName();
@@ -5312,6 +5451,8 @@ public class Compiler implements Opcodes {
     public boolean canBeCleared = !RT
         .booleanCast(getCompilerOption(disableLocalsClearingKey));
     public boolean recurMistmatch = false;
+    
+    public boolean skipMutableChecks = false;
 
     public LocalBinding(int num, Symbol sym, Symbol tag, Expr init,
         boolean isArg, PathNode clearPathRoot) {
@@ -5341,6 +5482,10 @@ public class Compiler implements Opcodes {
 
     public Class getPrimitiveType() {
       return maybePrimitiveType(init);
+    }
+    
+    public boolean tagMatchesClass(String classname) {
+      return tag != null && classname.equals(tag.name);
     }
   }
 
@@ -6910,10 +7055,11 @@ public class Compiler implements Opcodes {
   static public class NewInstanceExpr extends ObjExpr {
     // IPersistentMap optionsMap = PersistentArrayMap.EMPTY;
     IPersistentCollection methods;
+    IPersistentCollection ctors;
 
     Map<IPersistentVector, java.lang.reflect.Method> mmap;
     Map<IPersistentVector, Set<Class>> covariants;
-
+    
     public NewInstanceExpr(Object tag) {
       super(tag);
     }
@@ -6924,7 +7070,7 @@ public class Compiler implements Opcodes {
         // (deftype* tagname classname [fields] :implements [interfaces] :tag
         // tagname methods*)
         rform = RT.next(rform);
-        String tagname = ((Symbol) rform.first()).toString();
+        Symbol tagname = ((Symbol) rform.first());
         rform = rform.next();
         Symbol classname = (Symbol) rform.first();
         rform = rform.next();
@@ -6938,7 +7084,30 @@ public class Compiler implements Opcodes {
 
         ObjExpr ret = build((IPersistentVector) RT.get(opts, implementsKey,
             PersistentVector.EMPTY), fields, null, tagname, classname,
-            (Symbol) RT.get(opts, RT.TAG_KEY), rform, frm);
+            (Symbol) RT.get(opts, RT.TAG_KEY), rform, frm, ObjExprType.DEFTYPE);
+        return ret;
+      }
+    }
+
+    static class DefclassParser implements IParser {
+      public Expr parse(C context, final Object frm) {
+        ISeq rform = (ISeq) frm;
+        rform = RT.next(rform);
+        Symbol tagname = ((Symbol) rform.first());
+        rform = rform.next();
+        Symbol classname = (Symbol) rform.first();
+        rform = rform.next();
+        IPersistentVector fields = (IPersistentVector) rform.first();
+        rform = rform.next();
+        IPersistentMap opts = PersistentHashMap.EMPTY;
+        while (rform != null && rform.first() instanceof Keyword) {
+          opts = opts.assoc(rform.first(), RT.second(rform));
+          rform = rform.next().next();
+        }
+
+        ObjExpr ret = build((IPersistentVector) RT.get(opts, implementsKey,
+            PersistentVector.EMPTY), fields, null, tagname, classname,
+            (Symbol) RT.get(opts, RT.TAG_KEY), rform, frm, ObjExprType.DEFCLASS);
         return ret;
       }
     }
@@ -6960,8 +7129,8 @@ public class Compiler implements Opcodes {
 
         rform = RT.next(rform);
 
-        ObjExpr ret = build(interfaces, null, null, classname,
-            Symbol.intern(classname), null, rform, frm);
+        ObjExpr ret = build(interfaces, null, null, Symbol.intern(classname),
+            Symbol.intern(classname), null, rform, frm, ObjExprType.OTHER);
         if (frm instanceof IObj && ((IObj) frm).meta() != null)
           return new MetaExpr(ret, MapExpr.parse(context == C.EVAL ? context
               : C.EXPRESSION, ((IObj) frm).meta()));
@@ -6970,9 +7139,8 @@ public class Compiler implements Opcodes {
       }
     }
 
-    static ObjExpr build(IPersistentVector interfaceSyms,
-        IPersistentVector fieldSyms, Symbol thisSym, String tagName,
-        Symbol className, Symbol typeTag, ISeq methodForms, Object frm) {
+    static ObjExpr build(IPersistentVector interfaceSyms, IPersistentVector fieldSyms, Symbol thisSym, Symbol tagName,
+        Symbol className, Symbol typeTag, ISeq methodForms, Object frm, ObjExprType exprType) {
       NewInstanceExpr ret = new NewInstanceExpr(null);
 
       ret.src = frm;
@@ -6980,17 +7148,27 @@ public class Compiler implements Opcodes {
       ret.classMeta = RT.meta(className);
       ret.internalName = ret.name.replace('.', '/');
       ret.objtype = Type.getObjectType(ret.internalName);
-
-      if (thisSym != null)
+      ret.exprType = exprType;
+      
+      if (thisSym != null) {
         ret.thisName = thisSym.name;
+      }
 
       if (fieldSyms != null) {
         IPersistentMap fmap = PersistentHashMap.EMPTY;
         Object[] closesvec = new Object[2 * fieldSyms.count()];
         for (int i = 0; i < fieldSyms.count(); i++) {
           Symbol sym = (Symbol) fieldSyms.nth(i);
-          LocalBinding lb = new LocalBinding(-1, sym, null,
-              new MethodParamExpr(tagClass(tagOf(sym))), false, null);
+          Symbol tag = tagOf(sym);
+          MethodParamExpr mp = null;
+          LocalBinding lb = null;
+          if (tag != null && internalNameFromType(tag.name).equals(ret.internalName)) {
+            mp = new MethodParamExpr(Object.class);
+            lb = new LocalBinding(-1, sym, tag, mp, false, null);
+          } else {
+            mp = new MethodParamExpr(tagClass(tagOf(sym)));
+            lb = new LocalBinding(-1, sym, null, mp, false, null);
+          }
           fmap = fmap.assoc(sym, lb);
           closesvec[i * 2] = lb;
           closesvec[i * 2 + 1] = lb;
@@ -7005,29 +7183,86 @@ public class Compiler implements Opcodes {
                 .nth(i)).name.equals("__extmap")); --i)
           ret.altCtorDrops++;
       }
+      
+      // split methods into ctors and methods
+      // maybe move to clj and pass to parser already splitted
+      ISeq ctorForms = PersistentList.EMPTY;
+      if (ret.isDefclass()) {
+        IPersistentVector ctors = PersistentVector.EMPTY;
+        IPersistentVector methods = PersistentVector.EMPTY;
+        for (ISeq s = methodForms; s != null; s = RT.next(s)) {
+          ISeq form = (ISeq) RT.first(s);
+          Symbol dotname = (Symbol) RT.first(form);
+          Symbol name = (Symbol) Symbol.intern(null, munge(dotname.name)).withMeta(RT.meta(dotname));
+          
+          boolean customInit = name.meta() != null ? name.meta().containsKey(Keyword.intern("init")) : false;
+
+          if (customInit) {
+            ctors = ctors.cons(form);
+          } else {
+            methods = methods.cons(form);
+          }
+        }
+        
+        methodForms = methods.seq();
+        ctorForms = ctors.seq();
+        ret.skipDefaultCtors = ctors.count() != 0;
+      }
+      
       // todo - set up volatiles
-      // ret.volatiles = PersistentHashSet.create(RT.seq(RT.get(ret.optionsMap,
+      // ret.volatiles =
+      // PersistentHashSet.create(RT.seq(RT.get(ret.optionsMap,
       // volatileKey)));
 
+      Class superClass = Object.class;
+      int superclassCount = 0;
       PersistentVector interfaces = PersistentVector.EMPTY;
       for (ISeq s = RT.seq(interfaceSyms); s != null; s = s.next()) {
         Class c = (Class) resolve((Symbol) s.first());
-        if (!c.isInterface())
-          throw new IllegalArgumentException(
-              "only interfaces are supported, had: " + c.getName());
-        interfaces = interfaces.cons(c);
+        if (!c.isInterface()) {
+          if (ret.isDefclass()) {
+            if (superclassCount == 0) {
+              superClass = c;
+              superclassCount++;
+            } else {
+              throw new IllegalArgumentException("only one extend is supported, had: " + superClass.getName()
+                      + "; got: " + c.getName());
+            }
+          } else {
+            throw new IllegalArgumentException("only interfaces are supported, had: " + c.getName());
+          }
+        } else {
+          interfaces = interfaces.cons(c);
+        }
       }
-      Class superClass = Object.class;
-      Map[] mc = gatherMethods(superClass, RT.seq(interfaces));
+      
+      Map[] mc = gatherMethods(superClass, RT.seq(interfaces), false);
       Map overrideables = mc[0];
       Map covariants = mc[1];
       ret.mmap = overrideables;
       ret.covariants = covariants;
+      ret.classAccess = getClassModifiersCodesSum(tagName);
 
       String[] inames = interfaceNames(interfaces);
 
-      Class stub = compileStub(slashname(superClass), ret, inames, frm);
+      if (ret.isDefclass() && 
+          (ctorForms == null || ctorForms.count() == 0) &&
+          superclassCount != 0 && 
+          !hasNoArgCtor(superClass)) {
+        throw new IllegalArgumentException("No noarg ctor in parent class: " + superClass.getName());
+      }
+
+      Class stub = compileStub(slashname(superClass), ret, inames, methodForms, ctorForms, frm);
       Symbol thistag = Symbol.intern(null, stub.getName());
+      
+      //gather methods once again for compiled stub
+      if (ret.isDefclass()) {
+        mc = gatherMethods(stub, RT.seq(interfaces), true);
+        overrideables = mc[0];
+        covariants = mc[1];
+        ret.mmap = overrideables;
+        ret.covariants = covariants;
+      }
 
       try {
         Var.pushThreadBindings(RT.mapUniqueKeys(CONSTANTS,
@@ -7038,8 +7273,8 @@ public class Compiler implements Opcodes {
             NO_RECUR, null));
         if (ret.isDeftype()) {
           Var.pushThreadBindings(RT.mapUniqueKeys(METHOD, null, LOCAL_ENV,
-              ret.fields, COMPILE_STUB_SYM, Symbol.intern(null, tagName),
-              COMPILE_STUB_CLASS, stub));
+              ret.fields, COMPILE_STUB_SYM,
+              Symbol.intern(null, tagName.toString()), COMPILE_STUB_CLASS, stub));
 
           ret.hintedFields = RT.subvec(fieldSyms, 0, fieldSyms.count()
               - ret.altCtorDrops);
@@ -7054,8 +7289,15 @@ public class Compiler implements Opcodes {
               (ISeq) RT.first(s), thistag, overrideables);
           methods = RT.conj(methods, m);
         }
+        
+        IPersistentCollection ctors = null;
+        for (ISeq s = ctorForms; s != null; s = RT.next(s)) {
+          NewCtor c = NewCtor.parse(ret, (ISeq) RT.first(s), thistag, superClass);
+          ctors = RT.conj(ctors, c);
+        }
 
         ret.methods = methods;
+        ret.ctors = ctors;
         ret.keywords = (IPersistentMap) KEYWORDS.deref();
         ret.vars = (IPersistentMap) VARS.deref();
         ret.constants = (PersistentVector) CONSTANTS.deref();
@@ -7068,7 +7310,7 @@ public class Compiler implements Opcodes {
           Var.popThreadBindings();
         Var.popThreadBindings();
       }
-
+      
       try {
         ret.compile(slashname(superClass), inames, false);
       } catch (IOException e) {
@@ -7086,7 +7328,7 @@ public class Compiler implements Opcodes {
      * Unmunge the name (using a magic prefix) on any code gen for classes
      */
     static Class compileStub(String superName, NewInstanceExpr ret,
-        String[] interfaceNames, Object frm) {
+        String[] interfaceNames, ISeq methodForms, ISeq ctorForms, Object frm) {
       ClassWriter cw = new ClassWriter(ClassWriter.COMPUTE_MAXS);
       ClassVisitor cv = cw;
       cv.visit(V1_5, ACC_PUBLIC + ACC_SUPER, COMPILE_STUB_PREFIX + "/"
@@ -7095,56 +7337,128 @@ public class Compiler implements Opcodes {
       // instance fields for closed-overs
       for (ISeq s = RT.keys(ret.closes); s != null; s = s.next()) {
         LocalBinding lb = (LocalBinding) s.first();
-        int access = ACC_PUBLIC
-            + (ret.isVolatile(lb) ? ACC_VOLATILE : ret.isMutable(lb) ? 0
-                : ACC_FINAL);
-        if (lb.getPrimitiveType() != null)
+        int access = ACC_PUBLIC + (ret.isVolatile(lb) ? ACC_VOLATILE : ret.isMutable(lb) ? 0 : ACC_FINAL);
+        if (ret.isDefclass()) {
+          access = getFieldModifiersCodesSum(lb.sym);
+        }
+        if (lb.getPrimitiveType() != null) {
           cv.visitField(access, lb.name, Type.getType(lb.getPrimitiveType())
               .getDescriptor(), null, null);
-        else
+        }
+        else {
           // todo - when closed-overs are fields, use more specific types here
           // and in ctor and emitLocal?
-          cv.visitField(access, lb.name, OBJECT_TYPE.getDescriptor(), null,
-              null);
+          String desc = OBJECT_TYPE.getDescriptor();   
+          if (ret.isDefclass()) {
+            if (lb.tagMatchesClass(dotname(ret.internalName))) {
+              desc =  tagType(Symbol.intern(COMPILE_STUB_PREFIX + "." +  lb.tag.name)).getDescriptor();
+            } else {
+              desc = lb.getJavaClass() != null ? Type.getDescriptor(lb.getJavaClass()) : desc;
+            }
+          }
+          cv.visitField(access, lb.name, desc, null, null);
+        }
       }
-
-      // ctor that takes closed-overs and does nothing
-      Method m = new Method("<init>", Type.VOID_TYPE, ret.ctorTypes());
-      GeneratorAdapter ctorgen = new GeneratorAdapter(ACC_PUBLIC, m, null,
-          null, cv);
-      ctorgen.visitCode();
-      ctorgen.loadThis();
-      ctorgen.invokeConstructor(Type.getObjectType(superName), voidctor);
-      ctorgen.returnValue();
-      ctorgen.endMethod();
-
-      if (ret.altCtorDrops > 0) {
-        Type[] ctorTypes = ret.ctorTypes();
-        Type[] altCtorTypes = new Type[ctorTypes.length - ret.altCtorDrops];
-        for (int i = 0; i < altCtorTypes.length; i++)
-          altCtorTypes[i] = ctorTypes[i];
-        Method alt = new Method("<init>", Type.VOID_TYPE, altCtorTypes);
-        ctorgen = new GeneratorAdapter(ACC_PUBLIC, alt, null, null, cv);
+      
+      if (ctorForms == null || ctorForms.count() == 0) {
+        //default ctors
+        // ctor that takes closed-overs and does nothing
+        Method m = new Method("<init>", Type.VOID_TYPE, ret.ctorTypes());
+        GeneratorAdapter ctorgen = new GeneratorAdapter(ACC_PUBLIC, m, null,
+            null, cv);
         ctorgen.visitCode();
         ctorgen.loadThis();
-        ctorgen.loadArgs();
-        for (int i = 0; i < ret.altCtorDrops; i++)
-          ctorgen.visitInsn(Opcodes.ACONST_NULL);
-
-        ctorgen.invokeConstructor(
-            Type.getObjectType(COMPILE_STUB_PREFIX + "/" + ret.internalName),
-            new Method("<init>", Type.VOID_TYPE, ctorTypes));
-
+        ctorgen.invokeConstructor(Type.getObjectType(superName), voidctor);
         ctorgen.returnValue();
         ctorgen.endMethod();
+  
+        //when is it called? reify?
+        if (ret.altCtorDrops > 0) {
+          Type[] ctorTypes = ret.ctorTypes();
+          Type[] altCtorTypes = new Type[ctorTypes.length - ret.altCtorDrops];
+          for (int i = 0; i < altCtorTypes.length; i++)
+            altCtorTypes[i] = ctorTypes[i];
+          Method alt = new Method("<init>", Type.VOID_TYPE, altCtorTypes);
+          ctorgen = new GeneratorAdapter(ACC_PUBLIC, alt, null, null, cv);
+          ctorgen.visitCode();
+          ctorgen.loadThis();
+          ctorgen.loadArgs();
+          for (int i = 0; i < ret.altCtorDrops; i++)
+            ctorgen.visitInsn(Opcodes.ACONST_NULL);
+  
+          ctorgen.invokeConstructor(
+              Type.getObjectType(COMPILE_STUB_PREFIX + "/" + ret.internalName),
+              new Method("<init>", Type.VOID_TYPE, ctorTypes));
+  
+          ctorgen.returnValue();
+          ctorgen.endMethod();
+        }
+      } else {
+        //from declared
+        for (ISeq s = ctorForms; s != null; s = RT.next(s)) {
+          ISeq form = (ISeq) RT.first(s);
+          
+          //for meta
+          Symbol dotname = (Symbol) RT.first(form);
+          IPersistentVector params = (IPersistentVector) RT.second(form);
+          
+          ISeq body = RT.third(form) != null ? RT.next(form).next() : null;
+          boolean autogenerate = form.count() < 3;
+          IPersistentVector superparams = null;
+          if (body != null && body.first() != null && body.first() instanceof IPersistentList) {
+            IPersistentList l = (IPersistentList) body.first();
+            Object o = RT.first(l);
+            if (o instanceof Symbol) {
+              Symbol superctor = (Symbol)o;
+              String supername = superctor.name;
+              if (supername.equals("super!") || supername.equals("this!")) {
+                superparams = PersistentVector.create(RT.next(l));
+              }
+            }
+          }
+          
+          if (params.count() == 0) {
+            throw new IllegalArgumentException("Must supply at least one argument for 'this' in: " + dotname);
+          }
+          Symbol thisName = (Symbol) params.nth(0);
+          params = RT.subvec(params, 1, params.count());
+          
+          Type[] typesFromNames = ret.ctorTypes(params.seq(), autogenerate);
+          if (typesFromNames.length != params.count()) {
+            throw new IllegalArgumentException("Cannot match names from ctor declaration with actual fields");
+          }
+
+          for (int i = 0; i < typesFromNames.length; i++) {
+            Type t = typesFromNames[i];
+            if (internalNameFromType(t.getInternalName()).equals(ret.internalName)) {
+              String desc = "";
+              if (t.getInternalName().startsWith("[")) {
+                desc += t.getInternalName().substring(0, t.getDimensions());
+              } 
+              desc += "L" + COMPILE_STUB_PREFIX + "/" + ret.internalName + ";";
+              typesFromNames[i] = Type.getType(desc);
+            }
+          }
+          
+          //voidctor is sufficient in stub, it will be changed to proper one in compile
+          Method m = new Method("<init>", Type.VOID_TYPE, typesFromNames);
+          //TODO add support for flags
+          GeneratorAdapter ctorgen = new GeneratorAdapter(ACC_PUBLIC, m, null,null, cv);
+          ctorgen.visitCode();
+          ctorgen.loadThis();
+          ctorgen.invokeConstructor(Type.getObjectType(superName), voidctor);
+          ctorgen.returnValue();
+          ctorgen.endMethod();
+          
+        }
       }
+            
       // end of class
       cv.visitEnd();
-
+      
       byte[] bytecode = cw.toByteArray();
       DynamicClassLoader loader = (DynamicClassLoader) LOADER.deref();
-      return loader.defineClass(COMPILE_STUB_PREFIX + "." + ret.name, bytecode,
-          frm);
+      return loader.defineClass(COMPILE_STUB_PREFIX + "." + ret.name, bytecode, frm);
     }
 
     static String[] interfaceNames(IPersistentVector interfaces) {
@@ -7157,6 +7471,10 @@ public class Compiler implements Opcodes {
 
     static String slashname(Class c) {
       return c.getName().replace('.', '/');
+    }
+    
+    static String slashname(String s) {
+      return s.replace('.', '/');
     }
 
     protected void emitStatics(ClassVisitor cv) {
@@ -7236,7 +7554,15 @@ public class Compiler implements Opcodes {
         }
       }
     }
-
+    
+    //TODO merge with emitMethods?
+    protected void emitCtors(ClassVisitor cv) {
+      for (ISeq s = RT.seq(ctors); s != null; s = s.next()) {
+        ObjMethod method = (ObjMethod) s.first();
+        method.emit(this, cv);
+      }
+    }
+    
     protected void emitMethods(ClassVisitor cv) {
       for (ISeq s = RT.seq(methods); s != null; s = s.next()) {
         ObjMethod method = (ObjMethod) s.first();
@@ -7290,18 +7616,34 @@ public class Compiler implements Opcodes {
 
     static void gatherMethods(Class c, Map mm) {
       for (; c != null; c = c.getSuperclass()) {
-        for (java.lang.reflect.Method m : c.getDeclaredMethods())
+        for (java.lang.reflect.Method m : c.getDeclaredMethods()) {
           considerMethod(m, mm);
+        }
         for (java.lang.reflect.Method m : c.getMethods())
           considerMethod(m, mm);
       }
     }
+    
+    static void gatherDeclaredMethods(Class c, Map mm) {
+      for (java.lang.reflect.Method m : c.getDeclaredMethods()) {
+        IPersistentVector mk = msig(m);
+        if (!mm.containsKey(mk)) {
+          mm.put(mk, m);
+        }
+      }
+    }
 
-    static public Map[] gatherMethods(Class sc, ISeq interfaces) {
+    static public Map[] gatherMethods(Class sc, ISeq interfaces, boolean includeDeclared) {
       Map allm = new HashMap();
       gatherMethods(sc, allm);
-      for (; interfaces != null; interfaces = interfaces.next())
+      for (; interfaces != null; interfaces = interfaces.next()) {
         gatherMethods((Class) interfaces.first(), allm);
+      }
+      
+      //TODO remove?
+      if (includeDeclared) {
+        gatherDeclaredMethods(sc, allm);
+      }
 
       Map<IPersistentVector, java.lang.reflect.Method> mm = new HashMap<IPersistentVector, java.lang.reflect.Method>();
       Map<IPersistentVector, Set<Class>> covariants = new HashMap<IPersistentVector, Set<Class>>();
@@ -7328,15 +7670,328 @@ public class Compiler implements Opcodes {
       }
       return new Map[] { mm, covariants };
     }
+    
+    static public boolean hasNoArgCtor(Class sc) {
+      try {
+        return sc.getDeclaredConstructor() != null;
+      } catch (NoSuchMethodException e) {
+        return false;
+      }
+    }
   }
 
+  public static class NewCtor extends ObjMethod {
+    Type[] ctorTypes;
+    Type[] superCtorTypes;
+    Class[] exclasses;
+    String superName;
+    int accessModifiers;
+    Expr[] superParamExprs;
+    
+    static Symbol dummyThis = Symbol.intern(null, "dummy_this_fzdlkdgpert");
+    private IPersistentVector params;
+    private IPersistentVector superparams;
+    
+    boolean autogenerate;
+    boolean useThisAsSuperCtor;
+    
+    public NewCtor(ObjExpr objx, ObjMethod parent) {
+      super(objx, parent);
+    }
+    
+    int numParams() {
+      return argLocals.count();
+    }
+    
+    String getMethodName() {
+      throw new UnsupportedOperationException("Cannot return name for ctor");
+    }
+    
+    Type getReturnType() {
+      throw new UnsupportedOperationException("Cannot return return type for ctor");
+    }
+    
+    Type[] getArgTypes() {
+      return ctorTypes;
+    }
+    
+    public void emit(ObjExpr obj, ClassVisitor cv) {
+      
+      Method m = new Method("<init>", Type.VOID_TYPE, ctorTypes);
+      GeneratorAdapter gen = new GeneratorAdapter(accessModifiers, m, null, null, cv);
+      addAnnotation(gen, methodMeta);
+      for (int i = 0; i < params.count(); i++) {
+        IPersistentMap meta = RT.meta(params.nth(i));
+        addParameterAnnotation(gen, meta, i);
+      }
+            
+      Method superCtorMethod = superCtorTypes.length == 0 ? 
+        Method.getMethod("void <init>()") :
+        new Method("<init>", Type.VOID_TYPE, superCtorTypes);
+      
+      Label start = gen.newLabel();
+      Label end = gen.newLabel();
+      gen.visitCode();
+      Label loopLabel = gen.mark();
+      gen.visitLineNumber(line, loopLabel);
+      //gen.visitLabel(start);
+      gen.loadThis();
+      
+      //gen.visitCode();
+      //Label loopLabel = gen.mark();
+      //gen.visitLineNumber(line, loopLabel);
+      try {
+        Var.pushThreadBindings(RT.map(LOOP_LABEL, loopLabel, METHOD, this));
+        
+        //no clearing when using in superctor
+        for (int i = 0;  i < argLocals.count(); i++) {
+          LocalBinding lb = (LocalBinding) argLocals.nth(i);
+          lb.canBeCleared = false;
+        }
+        
+        //allow for setting in ctor
+        for (int i = 0; i < superParamExprs.length; i++) {
+          superParamExprs[i].emit(C.EVAL, objx, gen);
+          if (superCtorTypes[i] != OBJECT_TYPE) {
+            gen.checkCast(superCtorTypes[i]);
+          }
+        }
+                
+        gen.invokeConstructor(Type.getObjectType(superName), superCtorMethod);
+
+        for (int i = 0;  i < argLocals.count(); i++) {
+          LocalBinding lb = (LocalBinding) argLocals.nth(i);
+          lb.canBeCleared = true;
+        }
+        
+        for (ISeq s = RT.keys(obj.closes); s != null; s = s.next()) {
+          LocalBinding lb = (LocalBinding) s.first();
+          lb.skipMutableChecks = true;
+        }
+        
+        if (body != null) {
+          body.emit(C.EVAL, objx, gen);
+        }
+        
+        for (ISeq s = RT.keys(obj.closes); s != null; s = s.next()) {
+          LocalBinding lb = (LocalBinding) s.first();
+          lb.skipMutableChecks = false;
+        }
+        
+        //wrap fields when autogenerated
+        if (autogenerate) {
+          //int a = supportsMeta() ? 2 : 1;
+          int a = 1;
+          //do this only for matched fields (by name)
+          IPersistentMap fieldsMap = matchNamesWithFields(params.seq(), obj.closes);
+          for (ISeq ss = params.seq(); ss != null; ss = ss.next(), ++a) {
+            LocalBinding lb = (LocalBinding) RT.get(fieldsMap, ss.first());
+            //statics not supported, throw error to indicate this
+            if (lb.sym.meta() != null && lb.sym.meta().containsKey(ACCESS_STATIC_FLAG)) {
+              throw new IllegalArgumentException("Cannot autogenerate ctor setting static field");
+            } 
+            gen.loadThis();
+            Class primc = lb.getPrimitiveType();
+            if (primc != null) {
+              gen.visitVarInsn(Type.getType(primc).getOpcode(Opcodes.ILOAD), a);
+              gen.putField(obj.objtype, lb.name, Type.getType(primc));
+              if (primc == Long.TYPE || primc == Double.TYPE)
+                ++a;
+            } else {
+              Type t = Type.getType(lb.getJavaClass());
+              gen.visitVarInsn(t.getOpcode(Opcodes.ILOAD), a);
+              gen.putField(obj.objtype, lb.name, t);
+            }
+            //closesExprs = closesExprs.cons(new LocalBindingExpr(lb, null));
+          }
+        }
+        
+      } finally {
+        Var.popThreadBindings();
+      }
+      
+      gen.visitLabel(end);
+      gen.returnValue();
+      gen.endMethod();
+    }
+    
+    static NewCtor parse(ObjExpr objx, ISeq form, Symbol thistag, Class superClass) {      
+
+      NewCtor ctor = new NewCtor(objx, (ObjMethod) METHOD.deref());
+      
+      Symbol dotname = (Symbol) RT.first(form);
+      Symbol name = (Symbol) Symbol.intern(null, munge(dotname.name)).withMeta(RT.meta(dotname));
+      IPersistentVector params = (IPersistentVector) RT.second(form);
+      
+      ISeq body = RT.third(form) != null ? RT.next(form).next() : null;
+      IPersistentVector superparams = PersistentVector.EMPTY;
+      boolean autogenerate = form.count() < 3;
+      boolean useThisAsSuperCtor = false;
+     
+      if (body != null && body.first() != null && body.first() instanceof IPersistentList) {
+        IPersistentList l = (IPersistentList) body.first();
+        Object o = RT.first(l);
+        if (o instanceof Symbol) {
+          Symbol superctor = (Symbol)o;
+          String supername = superctor.name;
+          if (supername.equals("super!") || supername.equals("this!")) {
+            useThisAsSuperCtor = supername.equals("this!");
+            superparams = PersistentVector.create(RT.next(l));
+            body = body.next();
+          }
+        }
+      }
+      
+      ctor.accessModifiers = objx.isDefclass() ? getMethodModifiersCodesSum(dotname) : ACC_PUBLIC;
+      
+      if (params.count() == 0) {
+        throw new IllegalArgumentException( "Must supply at least one argument for 'this' in: " + dotname);
+      }
+      Symbol thisName = (Symbol) params.nth(0);
+      params = RT.subvec(params, 1, params.count());
+      
+      //ctor types
+      Type[] ctorTypes = objx.ctorTypes(params.seq(), autogenerate);
+      if (autogenerate && ctorTypes.length != params.count()) {
+        throw new IllegalArgumentException("Cannot match names from ctor declaration with actual fields");
+      }
+      
+      //superctor types
+      IPersistentVector tv = PersistentVector.EMPTY;
+      for (ISeq ss = superparams.seq(); ss != null; ss = ss.next()) {
+        Object o = ss.first();
+        IPersistentMap m = RT.meta(o);
+        Class c = java.lang.Object.class;
+        if (m != null) {
+          Symbol hint = (Symbol)RT.get(m, Keyword.intern("tag"));
+          if (hint != null) {
+            c = HostExpr.tagToClass(hint);
+          }
+        } 
+        tv = tv.cons(c);
+      }
+      
+      Type[] superCtorTypes = new Type[tv.count()];
+      Class[] superCtorClasses = new Class[tv.count()]; 
+      for (int i = 0; i < tv.count(); i++) {
+        Class c = (Class) tv.nth(i);
+        superCtorTypes[i] = Type.getType(c);
+        superCtorClasses[i] = c;
+      }
+      
+      String superName = superClass.getName().replace('.', '/');
+      if (useThisAsSuperCtor) {
+        superClass = (Class)COMPILE_STUB_CLASS.get();
+        superName = objx.internalName;
+      } 
+     
+      try {
+        superClass.getDeclaredConstructor(superCtorClasses);
+      } catch (NoSuchMethodException e) {
+        throw new IllegalArgumentException("Cannot find super ctor for class: " + superClass.getName() + " and types " + tv); 
+      } catch (Exception e) {
+        //nothing
+      }
+    
+      try {
+        ctor.line = lineDeref();
+        ctor.column = columnDeref();
+        PathNode pnode = new PathNode(PATHTYPE.PATH, (PathNode) CLEAR_PATH.get());
+        Var.pushThreadBindings(RT.mapUniqueKeys(METHOD, ctor, 
+                                                LOCAL_ENV, LOCAL_ENV.deref(), 
+                                                LOOP_LOCALS, null, 
+                                                NEXT_LOCAL_NUM, 0,
+                                                CLEAR_PATH, pnode, 
+                                                CLEAR_ROOT, pnode, 
+                                                CLEAR_SITES, PersistentHashMap.EMPTY));
+        
+        if (thisName != null) {
+          registerLocal((thisName == null) ? dummyThis : thisName, thistag, null, false);
+        } else {
+          getAndIncLocalNum();
+        }
+
+        PersistentVector argLocals = PersistentVector.EMPTY;
+        Class[] pclasses = new Class[params.count()];
+        Symbol[] psyms = new Symbol[params.count()];
+        
+        for (int i = 0; i < params.count(); i++) {
+          //maybe move to compile stub or external validation
+          if (!(params.nth(i) instanceof Symbol)) {
+            throw new IllegalArgumentException("params must be Symbols");
+          }
+          Symbol p = (Symbol) params.nth(i);
+          Object tag = tagOf(p);
+          pclasses[i] = ctorTypes[i].getClass();
+          psyms[i] = p;
+        }
+        
+        for (int i = 0; i < params.count(); i++) {
+          LocalBinding lb = registerLocal(psyms[i], null, new MethodParamExpr(pclasses[i]), true);
+          argLocals = argLocals.assocN(i, lb);
+        }
+        
+        for (int i = 0; i < params.count(); i++) {
+          if (pclasses[i] == long.class || pclasses[i] == double.class) {
+            getAndIncLocalNum();
+          }
+        }
+        
+        LOOP_LOCALS.set(argLocals);
+        
+        ctor.autogenerate = autogenerate;
+        ctor.useThisAsSuperCtor = useThisAsSuperCtor;
+        ctor.params = params;
+        ctor.superparams = superparams;
+        ctor.ctorTypes = ctorTypes;
+        ctor.superCtorTypes = superCtorTypes;
+        ctor.superName = superName;
+        ctor.methodMeta = RT.meta(name);
+        ctor.argLocals = argLocals;
+        ctor.body = body == null ? null : (new BodyExpr.Parser()).parse(C.EVAL, body);
+        
+        //superparam exprs
+        Expr[] superParamExprs = new Expr[superparams.count()];
+        for (int i = 0; i < superparams.count(); i++) {
+          Object o = PersistentList.EMPTY.cons(superparams.nth(i)).seq();
+          superParamExprs[i] = (new BodyExpr.Parser()).parse(C.EVAL, o);
+        }
+        
+        ctor.superParamExprs = superParamExprs;
+        return ctor;
+      } finally {
+        Var.popThreadBindings();
+      }
+    }
+    
+    IPersistentMap matchNamesWithFields(ISeq params, IPersistentMap closes) {
+      IPersistentMap ret = PersistentArrayMap.EMPTY;
+      
+      IPersistentMap m = PersistentHashMap.EMPTY;
+      for (ISeq s = RT.keys(closes); s != null; s = s.next()) {
+        LocalBinding lb = (LocalBinding) s.first();
+        m = m.assoc(lb.name, lb);
+      }
+      
+      for (ISeq s = params; s != null; s = s.next()) {
+        Symbol param = (Symbol) s.first();
+        if (m.containsKey(param.name)) {
+          LocalBinding lb = (LocalBinding)RT.get(m, param.name);
+          ret = ret.assoc(param, lb);
+        }
+      }
+      return ret;
+    }
+  }
+  
   public static class NewInstanceMethod extends ObjMethod {
     String name;
     Type[] argTypes;
     Type retType;
     Class retClass;
     Class[] exclasses;
-
+    int accessModifiers;
+    
     static Symbol dummyThis = Symbol.intern(null, "dummy_this_dlskjsdfower");
     private IPersistentVector parms;
 
@@ -7359,6 +8014,10 @@ public class Compiler implements Opcodes {
     Type[] getArgTypes() {
       return argTypes;
     }
+    
+    int getAccessModifiers() {
+      return accessModifiers;
+    }
 
     static public IPersistentVector msig(String name, Class[] paramTypes) {
       return RT.vector(name, RT.seq(paramTypes));
@@ -7368,19 +8027,26 @@ public class Compiler implements Opcodes {
         Map overrideables) {
       // (methodname [this-name args*] body...)
       // this-name might be nil
-      NewInstanceMethod method = new NewInstanceMethod(objx,
-          (ObjMethod) METHOD.deref());
+      NewInstanceMethod method = new NewInstanceMethod(objx, (ObjMethod) METHOD.deref());
       Symbol dotname = (Symbol) RT.first(form);
-      Symbol name = (Symbol) Symbol.intern(null, munge(dotname.name)).withMeta(
-          RT.meta(dotname));
-      IPersistentVector parms = (IPersistentVector) RT.second(form);
-      if (parms.count() == 0) {
-        throw new IllegalArgumentException(
-            "Must supply at least one argument for 'this' in: " + dotname);
+      Symbol name = (Symbol) Symbol.intern(null, munge(dotname.name)).withMeta(RT.meta(dotname));
+      IPersistentVector params = (IPersistentVector) RT.second(form);
+      boolean isMethodStatic = objx.isStatic(dotname);
+      boolean isMethodAbstract = objx.isAbstract(dotname);
+      boolean isMethodDeclared = name.meta() != null && name.meta().containsKey(Keyword.intern("declares")) 
+          && objx.isDefclass();
+      
+      Symbol thisName = null;
+      if (!(objx.isDefclass() && isMethodStatic)) {
+        if (params.count() == 0) {
+          throw new IllegalArgumentException( "Must supply at least one argument for 'this' in: " + dotname);
+        }
+        thisName = (Symbol) params.nth(0);
+        params = RT.subvec(params, 1, params.count());
       }
-      Symbol thisName = (Symbol) parms.nth(0);
-      parms = RT.subvec(parms, 1, parms.count());
+      
       ISeq body = RT.next(RT.next(form));
+      method.accessModifiers = objx.isDefclass() ? getMethodModifiersCodesSum(dotname) : ACC_PUBLIC;
       try {
         method.line = lineDeref();
         method.column = columnDeref();
@@ -7393,101 +8059,128 @@ public class Compiler implements Opcodes {
             PersistentHashMap.EMPTY));
 
         // register 'this' as local 0
-        if (thisName != null)
-          registerLocal((thisName == null) ? dummyThis : thisName, thistag,
-              null, false);
-        else
+        if (thisName != null) {
+          registerLocal((thisName == null) ? dummyThis : thisName, thistag, null, false);
+        } else {
           getAndIncLocalNum();
+        }
 
         PersistentVector argLocals = PersistentVector.EMPTY;
-        method.retClass = tagClass(tagOf(name));
-        method.argTypes = new Type[parms.count()];
+        Symbol sym = tagOf(name);
+        if (objx.isDefclass() && sym != null && internalNameFromType(sym.name).equals(objx.internalName)) {
+          method.retType = tagType(sym);
+        } else {
+          method.retClass = tagClass(sym);
+        }
+        method.argTypes = new Type[params.count()];
         boolean hinted = tagOf(name) != null;
-        Class[] pclasses = new Class[parms.count()];
-        Symbol[] psyms = new Symbol[parms.count()];
+        Class[] pclasses = new Class[params.count()];
+        Type[] ptypes = new Type[params.count()]; 
+        Symbol[] psyms = new Symbol[params.count()];
 
-        for (int i = 0; i < parms.count(); i++) {
-          if (!(parms.nth(i) instanceof Symbol))
+        for (int i = 0; i < params.count(); i++) {
+          if (!(params.nth(i) instanceof Symbol))
             throw new IllegalArgumentException("params must be Symbols");
-          Symbol p = (Symbol) parms.nth(i);
+          Symbol p = (Symbol) params.nth(i);
           Object tag = tagOf(p);
-          if (tag != null)
+          if (tag != null) {
             hinted = true;
-          if (p.getNamespace() != null)
+          }
+          if (p.getNamespace() != null) {
             p = Symbol.intern(p.name);
-          Class pclass = tagClass(tag);
-          pclasses[i] = pclass;
+          }
+          Type tagType = tagType(tag);
+          if (tagType != null && internalNameFromType(tagType.getInternalName()).equals(objx.internalName)) {
+            pclasses[i] = Object.class;  
+            ptypes[i] = tagType;
+          } else {
+            Class pclass = tagClass(tag);
+            pclasses[i] = pclass;  
+          }
           psyms[i] = p;
         }
-        Map matches = findMethodsWithNameAndArity(name.name, parms.count(),
-            overrideables);
-        Object mk = msig(name.name, pclasses);
-        java.lang.reflect.Method m = null;
-        if (matches.size() > 0) {
-          // multiple methods
-          if (matches.size() > 1) {
-            // must be hinted and match one method
-            if (!hinted)
-              throw new IllegalArgumentException(
-                  "Must hint overloaded method: " + name.name);
-            m = (java.lang.reflect.Method) matches.get(mk);
-            if (m == null)
-              throw new IllegalArgumentException(
-                  "Can't find matching overloaded method: " + name.name);
-            if (m.getReturnType() != method.retClass)
-              throw new IllegalArgumentException("Mismatched return type: "
-                  + name.name + ", expected: " + m.getReturnType().getName()
-                  + ", had: " + method.retClass.getName());
-          } else // one match
-          {
-            // if hinted, validate match,
-            if (hinted) {
+        if (!isMethodDeclared) {
+          Map matches = findMethodsWithNameAndArity(name.name, params.count(), overrideables);
+          Object mk = msig(name.name, pclasses);
+          java.lang.reflect.Method m = null;
+          if (matches.size() > 0) {
+            // multiple methods
+            if (matches.size() > 1) {
+              // must be hinted and match one method
+              if (!hinted)
+                throw new IllegalArgumentException(
+                    "Must hint overloaded method: " + name.name);
               m = (java.lang.reflect.Method) matches.get(mk);
               if (m == null)
                 throw new IllegalArgumentException(
-                    "Can't find matching method: " + name.name
-                        + ", leave off hints for auto match.");
+                    "Can't find matching overloaded method: " + name.name);
               if (m.getReturnType() != method.retClass)
                 throw new IllegalArgumentException("Mismatched return type: "
                     + name.name + ", expected: " + m.getReturnType().getName()
                     + ", had: " + method.retClass.getName());
-            } else // adopt found method sig
+            } else // one match
             {
-              m = (java.lang.reflect.Method) matches.values().iterator().next();
-              method.retClass = m.getReturnType();
-              pclasses = m.getParameterTypes();
+              // if hinted, validate match,
+              if (hinted) {
+                m = (java.lang.reflect.Method) matches.get(mk);
+                if (m == null)
+                  throw new IllegalArgumentException(
+                      "Can't find matching method: " + name.name
+                          + ", leave off hints for auto match.");
+                // skip for declared
+                if (m.getReturnType() != method.retClass && !isMethodDeclared)
+                  throw new IllegalArgumentException("Mismatched return type: "
+                      + name.name + ", expected: " + m.getReturnType().getName()
+                      + ", had: " + method.retClass.getName());
+              } else // adopt found method sig
+              {
+                m = (java.lang.reflect.Method) matches.values().iterator().next();
+                method.retClass = m.getReturnType();
+                pclasses = m.getParameterTypes();
+              }
             }
           }
+          // else if(findMethodsWithName(name.name,allmethods).size()>0)
+          // throw new IllegalArgumentException("Can't override/overload method: "
+          // + name.name);
+          else {
+            throw new IllegalArgumentException("Can't define method not in interfaces: " + name.name);
+          }
+          // else
+          // validate unque name+arity among additional methods
+          method.retType = Type.getType(method.retClass);
+          method.exclasses = m.getExceptionTypes();
+        
+        } else {
+          
+          if (method.retClass != null) {
+            method.retType = Type.getType(method.retClass);
+          }
+          //TODO add support
+          method.exclasses = new Class[0];
         }
-        // else if(findMethodsWithName(name.name,allmethods).size()>0)
-        // throw new IllegalArgumentException("Can't override/overload method: "
-        // + name.name);
-        else
-          throw new IllegalArgumentException(
-              "Can't define method not in interfaces: " + name.name);
 
-        // else
-        // validate unque name+arity among additional methods
-
-        method.retType = Type.getType(method.retClass);
-        method.exclasses = m.getExceptionTypes();
-
-        for (int i = 0; i < parms.count(); i++) {
-          LocalBinding lb = registerLocal(psyms[i], null, new MethodParamExpr(
-              pclasses[i]), true);
+        for (int i = 0; i < params.count(); i++) {
+          Symbol tag = ptypes[i] != null ? tagOf((Symbol)params.nth(i)) : null;
+          LocalBinding lb = registerLocal(psyms[i], tag, new MethodParamExpr(pclasses[i]), true);
           argLocals = argLocals.assocN(i, lb);
-          method.argTypes[i] = Type.getType(pclasses[i]);
+          if (tag != null) {
+            method.argTypes[i] = ptypes[i];
+          } else {
+            method.argTypes[i] = Type.getType(pclasses[i]);
+          }
         }
-        for (int i = 0; i < parms.count(); i++) {
+        for (int i = 0; i < params.count(); i++) {
           if (pclasses[i] == long.class || pclasses[i] == double.class)
             getAndIncLocalNum();
         }
         LOOP_LOCALS.set(argLocals);
         method.name = name.name;
         method.methodMeta = RT.meta(name);
-        method.parms = parms;
+        method.parms = params;
         method.argLocals = argLocals;
         method.body = (new BodyExpr.Parser()).parse(C.RETURN, body);
+        method.skipCode = isMethodAbstract;
         return method;
       } finally {
         Var.popThreadBindings();
@@ -7526,36 +8219,43 @@ public class Compiler implements Opcodes {
         for (int i = 0; i < exclasses.length; i++)
           extypes[i] = Type.getType(exclasses[i]);
       }
-      GeneratorAdapter gen = new GeneratorAdapter(ACC_PUBLIC, m, null, extypes,
-          cv);
+      
+      GeneratorAdapter gen = new GeneratorAdapter(getAccessModifiers(), m, null, extypes, cv);
       addAnnotation(gen, methodMeta);
       for (int i = 0; i < parms.count(); i++) {
         IPersistentMap meta = RT.meta(parms.nth(i));
         addParameterAnnotation(gen, meta, i);
       }
-      gen.visitCode();
-
-      Label loopLabel = gen.mark();
-
-      gen.visitLineNumber(line, loopLabel);
-      try {
-        Var.pushThreadBindings(RT.map(LOOP_LABEL, loopLabel, METHOD, this));
-
-        emitBody(objx, gen, retClass, body);
-        Label end = gen.mark();
-        gen.visitLocalVariable("this", obj.objtype.getDescriptor(), null,
-            loopLabel, end, 0);
-        for (ISeq lbs = argLocals.seq(); lbs != null; lbs = lbs.next()) {
-          LocalBinding lb = (LocalBinding) lbs.first();
-          gen.visitLocalVariable(lb.name, argTypes[lb.idx - 1].getDescriptor(),
-              null, loopLabel, end, lb.idx);
+      if (!skipCode) {
+        gen.visitCode();
+  
+        Label loopLabel = gen.mark();
+  
+        gen.visitLineNumber(line, loopLabel);
+        try {
+          Var.pushThreadBindings(RT.map(LOOP_LABEL, loopLabel, METHOD, this));
+  
+          if (retClass != null) {
+            emitBody(objx, gen, retClass, body);
+          } else {
+            emitBody(objx, gen, retType, body);
+          }
+  
+          Label end = gen.mark();
+          gen.visitLocalVariable("this", obj.objtype.getDescriptor(), null,
+              loopLabel, end, 0);
+          for (ISeq lbs = argLocals.seq(); lbs != null; lbs = lbs.next()) {
+            LocalBinding lb = (LocalBinding) lbs.first();
+            gen.visitLocalVariable(lb.name, argTypes[lb.idx - 1].getDescriptor(),
+                null, loopLabel, end, lb.idx);
+          }
+        } finally {
+          Var.popThreadBindings();
         }
-      } finally {
-        Var.popThreadBindings();
+  
+        gen.returnValue();
+        // gen.visitMaxs(1, 1);
       }
-
-      gen.returnValue();
-      // gen.visitMaxs(1, 1);
       gen.endMethod();
     }
   }
@@ -7595,6 +8295,23 @@ public class Compiler implements Opcodes {
       c = HostExpr.tagToClass(tag);
     return c;
   }
+  
+  static Type tagType(Object tag) {
+    Type t = null;
+    if (tag instanceof Symbol) {
+      Symbol sym = (Symbol) tag;
+      if (sym.name.indexOf(".") >= 0) {
+        String name = sym.name.replace('.', '/');
+        boolean isArray = name.startsWith("[");
+        if (isArray) {
+          t = Type.getType(name);
+        } else {
+          t = Type.getType("L" + name + ";");
+        }
+      }
+    }
+    return t;
+  }
 
   static Class primClass(Class c) {
     return c.isPrimitive() ? c : Object.class;
@@ -7632,7 +8349,7 @@ public class Compiler implements Opcodes {
     public MethodParamExpr(Class c) {
       this.c = c;
     }
-
+    
     public Object eval() {
       throw Util.runtimeException("Can't eval");
     }
@@ -7971,5 +8688,125 @@ public class Compiler implements Opcodes {
   static IPersistentCollection emptyVarCallSites() {
     return PersistentHashSet.EMPTY;
   }
+  
+  //FIXME looks ugly, rewrite to something nicer and merge methods for class, field, method
+  static int getVisivilityModifiersCodesSum(IPersistentMap m) {
+    int opcodes = 0;
+    if (m != null) {
+      //check for visibility
+      if (m.containsKey(ACCESS_PUBLIC_FLAG)) {
+        opcodes += Opcodes.ACC_PUBLIC;
+      } else if (m.containsKey(ACCESS_PROTECTED_FLAG)) {
+        opcodes += Opcodes.ACC_PROTECTED;
+      } else  if (m.containsKey(ACCESS_PRIVATE_FLAG)) {
+        opcodes += Opcodes.ACC_PRIVATE;
+      }
+      
+      //nothing added, so make it public
+      if (opcodes == 0) {
+        opcodes += Opcodes.ACC_PUBLIC;
+      }
+    }
+    return opcodes;
+  }
+  
+  static int getClassModifiersCodesSum(Symbol classname) {
+    IPersistentMap m = classname.meta();
+    int opcodes = 0;
+    if (m != null) {
+      //check for visibility
+      opcodes = getVisivilityModifiersCodesSum(m);
 
+      //check for other options
+      if (m.containsKey(ACCESS_ABSTRACT_FLAG) && !m.containsKey(ACCESS_NONFINAL_FLAG)) {
+        throw new IllegalArgumentException("Cannot create final abstract class!");
+      } else {
+        if (m.containsKey(ACCESS_ABSTRACT_FLAG)) {
+          opcodes += Opcodes.ACC_ABSTRACT;
+        }
+        if (!m.containsKey(ACCESS_NONFINAL_FLAG)) {
+          opcodes += Opcodes.ACC_FINAL;
+        }
+      }
+      opcodes += ACC_SUPER;
+    } else {
+      //defaults 
+      opcodes = ACC_PUBLIC + ACC_SUPER + ACC_FINAL;
+    }
+    return opcodes;
+  }
+  
+  static int getFieldModifiersCodesSum(Symbol field) {
+    IPersistentMap m = field.meta();
+    int opcodes = 0;
+    if (m != null) {
+      // check for visibility 
+      opcodes = getVisivilityModifiersCodesSum(m);
+      
+      //other field checks
+      if (m.containsKey(ACCESS_VOLATILE_MUTABLE)) {
+        opcodes += Opcodes.ACC_VOLATILE;
+      } else if (!m.containsKey(ACCESS_UNSYNC_MUTABLE)) {
+        opcodes += Opcodes.ACC_FINAL;
+      }
+      if (m.containsKey(ACCESS_STATIC_FLAG)) {
+        opcodes += Opcodes.ACC_STATIC;
+      }
+      
+    } else {
+      opcodes = ACC_PUBLIC + ACC_FINAL;
+    }
+    return opcodes;
+  }
+  
+  static int getMethodModifiersCodesSum(Symbol method) {
+    IPersistentMap m = method.meta();
+    int opcodes = 0;
+    if (m != null) {
+      // check for visibility 
+      opcodes = getVisivilityModifiersCodesSum(m);
+      
+      if (m.containsKey(ACCESS_ABSTRACT_FLAG)) {
+        opcodes += Opcodes.ACC_ABSTRACT;
+      }
+      if (m.containsKey(ACCESS_FINAL_FLAG)) {
+        opcodes += Opcodes.ACC_FINAL;
+      }
+      if (m.containsKey(ACCESS_STATIC_FLAG)) {
+        opcodes += Opcodes.ACC_STATIC;
+      }
+      
+      // not yet
+      //if (m.containsKey(ACCESS_NATIVE_FLAG)) {
+      //  opcodes += Opcodes.ACC_NATIVE;
+      //}
+    } else {
+      opcodes = ACC_PUBLIC;
+    }
+    return opcodes;
+  }
+  
+  static String internalNameFromType(String type) {
+    String s = type;
+    if (type.startsWith("[")) {
+      s = type.replaceAll("\\[", "").substring(1).replace(";", "");
+    } 
+    return s.replace('.','/');
+  }
+
+  static String dotname(String slashname) {
+    return slashname.replace('/', '.');
+  }
+  
+  static Type getTagType(String internalName, boolean isDefclass, LocalBinding lb) {
+    Type t= OBJECT_TYPE;
+    if (isDefclass) {
+      if (lb.tagMatchesClass(dotname(internalName))) {
+        t =  tagType(lb.tag);
+      } else {
+        t = lb.getJavaClass() != null ? Type.getType(lb.getJavaClass()) : t;
+      }
+    }
+    return t;
+  }
 }
