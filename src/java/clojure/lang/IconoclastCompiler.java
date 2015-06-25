@@ -10,6 +10,11 @@
 
 /* rich Aug 21, 2007 */
 
+/**
+ * Based on the original ClojureCompiler.
+ * vermilionsands 2015
+ **/
+
 package clojure.lang;
 
 import clojure.asm.*;
@@ -23,7 +28,7 @@ import java.util.*;
 import java.util.regex.Pattern;
 import java.util.regex.Matcher;
 
-public class HydraCompiler implements Opcodes {
+public class IconoclastCompiler implements Opcodes {
 
   static final Symbol DEF = Symbol.intern("def");
   static final Symbol LOOP = Symbol.intern("loop*");
@@ -61,6 +66,8 @@ public class HydraCompiler implements Opcodes {
   static final Symbol NS = Symbol.intern("ns");
   static final Symbol IN_NS = Symbol.intern("in-ns");
   static final Symbol INVOKE_STATIC = Symbol.intern("invokeStatic");
+  static final Symbol CTOR_THIS = Symbol.intern("this!");
+  static final Symbol CTOR_SUPER = Symbol.intern("super!");
   
   static final Keyword inlineKey = Keyword.intern(null, "inline");
   static final Keyword inlineAritiesKey = Keyword.intern(null, "inline-arities");
@@ -82,56 +89,38 @@ public class HydraCompiler implements Opcodes {
   public static final Keyword ACCESS_PROTECTED_FLAG = Keyword.intern(null, "protected");
   public static final Keyword ACCESS_ABSTRACT_FLAG = Keyword.intern(null, "abstract");
   public static final Keyword ACCESS_STATIC_FLAG = Keyword.intern(null, "static");
+  public static final Keyword ACCESS_TRANSIENT_FLAG = Keyword.intern(null, "transient");
+  public static final Keyword ACCESS_SYNCHRONIZED_FLAG = Keyword.intern(null, "synchronized");
+  public static final Keyword ACCESS_VARARGS_FLAG = Keyword.intern(null, "varargs");
   //TODO remove duplicated calls, use statics
   public static final Keyword ACCESS_VOLATILE_MUTABLE = Keyword.intern(null, "volatile-mutable");
   public static final Keyword ACCESS_UNSYNC_MUTABLE = Keyword.intern(null, "unsynchronized-mutable");
-  
-  //TODO remove unused
-  // static final Symbol TRY_FINALLY = Symbol.intern("try-finally");
-  // static final Symbol INSTANCE = Symbol.intern("instance?");
-  // static final Symbol THISFN = Symbol.intern("thisfn");
-  // static final Symbol UNQUOTE = Symbol.intern("unquote");
-  // static final Symbol UNQUOTE_SPLICING = Symbol.intern("unquote-splicing");
-  // static final Symbol SYNTAX_QUOTE = Symbol.intern("clojure.core", "syntax-quote");
-  // static final Symbol IMPORT = Symbol.intern("import");
-  // static final Symbol USE = Symbol.intern("use");
-  // static final Symbol IFN = Symbol.intern("clojure.lang", "IFn");
 
   static final public IPersistentMap specials = PersistentHashMap.create(
-      DEF, new DefExpr.Parser(), 
-      LOOP, new LetExpr.Parser(), 
-      RECUR, new RecurExpr.Parser(), 
-      IF, new IfExpr.Parser(), 
-      CASE, new CaseExpr.Parser(), 
-      LET, new LetExpr.Parser(), 
-      LETFN, new LetFnExpr.Parser(), 
-      DO, new BodyExpr.Parser(), 
-      FN, null, 
-      QUOTE, new ConstantExpr.Parser(), 
-      THE_VAR, new TheVarExpr.Parser(), 
-      IMPORT, new ImportExpr.Parser(), 
-      DOT, new HostExpr.Parser(), 
-      ASSIGN, new AssignExpr.Parser(), 
-      DEFTYPE, new NewInstanceExpr.DeftypeParser(), 
+      DEF, new DefExpr.Parser(),
+      LOOP, new LetExpr.Parser(),
+      RECUR, new RecurExpr.Parser(),
+      IF, new IfExpr.Parser(),
+      CASE, new CaseExpr.Parser(),
+      LET, new LetExpr.Parser(),
+      LETFN, new LetFnExpr.Parser(),
+      DO, new BodyExpr.Parser(),
+      FN, null,
+      QUOTE, new ConstantExpr.Parser(),
+      THE_VAR, new TheVarExpr.Parser(),
+      IMPORT, new ImportExpr.Parser(),
+      DOT, new HostExpr.Parser(),
+      ASSIGN, new AssignExpr.Parser(),
+      DEFTYPE, new NewInstanceExpr.DeftypeParser(),
       DEFCLASS, new NewInstanceExpr.DefclassParser(),
       REIFY, new NewInstanceExpr.ReifyParser(),
-      TRY, new TryExpr.Parser(), 
-      THROW, new ThrowExpr.Parser(), 
-      MONITOR_ENTER, new MonitorEnterExpr.Parser(), 
+      TRY, new TryExpr.Parser(),
+      THROW, new ThrowExpr.Parser(),
+      MONITOR_ENTER, new MonitorEnterExpr.Parser(),
       MONITOR_EXIT, new MonitorExitExpr.Parser(),
-      CATCH, null, 
+      CATCH, null,
       FINALLY, null,
       NEW, new NewExpr.Parser(),
-      
-      //TODO remove unused
-      // CLASS, new ClassExpr.Parser(),
-      // INSTANCE, new InstanceExpr.Parser(),
-      // IDENTICAL, new IdenticalExpr.Parser(),
-      // THISFN, null,
-      // UNQUOTE, null,
-      // UNQUOTE_SPLICING, null,
-      // SYNTAX_QUOTE, null,
-      // TRY_FINALLY, new TryFinallyExpr.Parser(),
       _AMP_, null);
 
   private static final int MAX_POSITIONAL_ARITY = 20;
@@ -139,7 +128,6 @@ public class HydraCompiler implements Opcodes {
   private static final Type KEYWORD_TYPE = Type.getType(Keyword.class);
   private static final Type VAR_TYPE = Type.getType(Var.class);
   private static final Type SYMBOL_TYPE = Type.getType(Symbol.class);
-  // private static final Type NUM_TYPE = Type.getType(Num.class);
   private static final Type IFN_TYPE = Type.getType(IFn.class);
   private static final Type AFUNCTION_TYPE = Type.getType(AFunction.class);
   private static final Type RT_TYPE = Type.getType(RT.class);
@@ -154,8 +142,6 @@ public class HydraCompiler implements Opcodes {
   final static Type IOBJ_TYPE = Type.getType(IObj.class);
 
   private static final Type[][] ARG_TYPES;
-  // private static final Type[] EXCEPTION_TYPES =
-  // {Type.getType(Exception.class)};
   private static final Type[] EXCEPTION_TYPES = {};
 
   static {
@@ -255,6 +241,9 @@ public class HydraCompiler implements Opcodes {
     return RT.get(COMPILER_OPTIONS.deref(), k);
   }
 
+  static Var ALLOW_SETTING_FINALS = Var.create(false).setDynamic();
+  static Var DEFINING_CLASS = Var.create(null).setDynamic();
+
   @SuppressWarnings("unchecked")
   static Object elideMeta(Object m) {
     Collection<Object> elides = (Collection<Object>) getCompilerOption(elideMetaKey);
@@ -308,7 +297,7 @@ public class HydraCompiler implements Opcodes {
     RETURN, // tail position relative to enclosing recur frame
     EVAL
   }
-  
+
   public enum ObjExprType {
     DEFTYPE,
     DEFCLASS,
@@ -902,7 +891,7 @@ public class HydraCompiler implements Opcodes {
           gen.invokeStatic(RT_TYPE, m);
         }
       } else {
-        gen.checkCast(Type.getType(paramType));
+        gen.checkCast(getType(paramType));
       }
     }
 
@@ -925,9 +914,9 @@ public class HydraCompiler implements Opcodes {
         Class c = maybeClass(RT.second(form), false);
         // at this point c will be non-null if static
         Expr instance = null;
-        if (c == null)
-          instance = analyze(context == C.EVAL ? context : C.EXPRESSION,
-              RT.second(form));
+        if (c == null) {
+          instance = analyze(context == C.EVAL ? context : C.EXPRESSION, RT.second(form));
+        }
 
         boolean maybeField = RT.length(form) == 3
             && (RT.third(form) instanceof Symbol);
@@ -951,10 +940,12 @@ public class HydraCompiler implements Opcodes {
           Symbol tag = tagOf(form);
           if (c != null) {
             return new StaticFieldExpr(line, column, c, munge(sym.name), tag);
-          } else
+          } else {
+            ObjMethod m = (ObjMethod)METHOD.deref();
             return new InstanceFieldExpr(line, column, instance,
                 munge(sym.name), tag,
                 (((Symbol) RT.third(form)).name.charAt(0) == '-'));
+          }
         } else {
           ISeq call = (ISeq) ((RT.third(form) instanceof ISeq) ? RT.third(form)
               : RT.next(RT.next(form)));
@@ -984,10 +975,12 @@ public class HydraCompiler implements Opcodes {
         Symbol sym = (Symbol) form;
         if (sym.ns == null) // if ns-qualified can't be classname
         {
-          if (Util.equals(sym, COMPILE_STUB_SYM.get()))
+          if (Util.equals(sym, COMPILE_STUB_SYM.get())) {
             return (Class) COMPILE_STUB_CLASS.get();
-          if (sym.name.indexOf('.') > 0 || sym.name.charAt(0) == '[')
+          }
+          if (sym.name.indexOf('.') > 0 || sym.name.charAt(0) == '[') {
             c = RT.classForName(sym.name);
+          }
           else {
             Object o = currentNS().getMapping(sym);
             if (o instanceof Class)
@@ -1002,8 +995,9 @@ public class HydraCompiler implements Opcodes {
             }
           }
         }
-      } else if (stringOk && form instanceof String)
+      } else if (stringOk && form instanceof String) {
         c = RT.classForName((String) form);
+      }
       return c;
     }
 
@@ -1082,17 +1076,25 @@ public class HydraCompiler implements Opcodes {
     final static Method setInstanceFieldMethod = Method
         .getMethod("Object setInstanceField(Object,String,Object)");
 
-    public InstanceFieldExpr(int line, int column, Expr target,
-        String fieldName, Symbol tag, boolean requireField) {
+    public InstanceFieldExpr(int line, int column, Expr target, String fieldName, Symbol tag, boolean requireField) {
       this.target = target;
       this.targetClass = target.hasJavaClass() ? target.getJavaClass() : null;
-      this.field = targetClass != null ? Reflector.getField(targetClass,
-          fieldName, false) : null;
       this.fieldName = fieldName;
       this.line = line;
       this.column = column;
       this.tag = tag;
       this.requireField = requireField;
+
+      java.lang.reflect.Field f = targetClass != null ? Reflector.getField(targetClass, fieldName, false) : null;
+
+      String owner = (String)DEFINING_CLASS.deref();
+      if (f == null && owner!= null && targetClass != null
+          && (targetClass.getName().equals(owner) || destubClassName(targetClass.getName()).equals(owner))) {
+        this.field = IconoclastReflector.getField(targetClass, fieldName, false, true, true);
+      } else {
+        this.field = f;
+      }
+
       if (field == null && RT.booleanCast(RT.WARN_ON_REFLECTION.deref())) {
         if (targetClass == null) {
           RT.errPrintWriter()
@@ -1124,7 +1126,7 @@ public class HydraCompiler implements Opcodes {
       if (targetClass != null && field != null) {
         target.emit(C.EXPRESSION, objx, gen);
         gen.checkCast(getType(targetClass));
-        gen.getField(getType(targetClass), fieldName, Type.getType(field.getType()));
+        gen.getField(getType(targetClass), fieldName, getType(field.getType()));
       } else
         throw new UnsupportedOperationException(
             "Unboxed emit of unknown member");
@@ -1135,7 +1137,7 @@ public class HydraCompiler implements Opcodes {
       if (targetClass != null && field != null) {
         target.emit(C.EXPRESSION, objx, gen);
         gen.checkCast(getType(targetClass));
-        gen.getField(getType(targetClass), fieldName, Type.getType(field.getType()));
+        gen.getField(getType(targetClass), fieldName, getType(field.getType()));
         // if(context != C.STATEMENT)
         HostExpr.emitBoxReturn(objx, gen, field.getType());
         if (context == C.STATEMENT) {
@@ -1164,8 +1166,11 @@ public class HydraCompiler implements Opcodes {
     }
 
     //Added fix from CLJ-1226
-    public void emitAssign(C context, ObjExpr objx, GeneratorAdapter gen,
-        Expr val) {
+    public void emitAssign(C context, ObjExpr objx, GeneratorAdapter gen, Expr val) {
+      if (field != null && Modifier.isFinal(field.getModifiers())) {
+        throw new UnsupportedOperationException("Cannot assign to non-mutable " + fieldName
+            + " in " + getType(targetClass).getClassName());
+      }
       gen.visitLineNumber(line, gen.mark());
       if (targetClass != null && field != null) {
         target.emit(C.EXPRESSION, objx, gen);
@@ -1173,7 +1178,7 @@ public class HydraCompiler implements Opcodes {
         val.emit(C.EXPRESSION, objx, gen);
         gen.dupX1();
         HostExpr.emitUnboxArg(objx, gen, field.getType());
-        gen.putField(getType(targetClass), fieldName, Type.getType(field.getType()));
+        gen.putField(getType(targetClass), fieldName, getType(field.getType()));
       } else {
         target.emit(C.EXPRESSION, objx, gen);
         gen.push(fieldName);
@@ -1206,11 +1211,30 @@ public class HydraCompiler implements Opcodes {
       this.column = column;
       // c = Class.forName(className);
       this.c = c;
+      java.lang.reflect.Field f = null;
       try {
-        field = c.getField(fieldName);
+         f = c.getField(fieldName);
       } catch (NoSuchFieldException e) {
-        throw Util.sneakyThrow(e);
+        if (DEFINING_CLASS.deref() != null) {
+          String owner = (String)DEFINING_CLASS.deref();
+          //TODO
+          Class ownerClass = RT.classForName(COMPILE_STUB_PREFIX + "." + owner);
+
+          if (c.getName().equals(owner)
+              || destubClassName(c.getName()).equals(owner)) {
+            f = IconoclastReflector.getField(c, fieldName, true, true, true);
+          } else if (c.isAssignableFrom(ownerClass)) {
+            f = IconoclastReflector.getField(c, fieldName, true, true, false);
+          }
+
+        }
+        if (f == null) {
+          throw Util.sneakyThrow(e);
+        }
+      } finally {
+        this.field = f;
       }
+
       this.tag = tag;
     }
 
@@ -1224,13 +1248,13 @@ public class HydraCompiler implements Opcodes {
 
     public void emitUnboxed(C context, ObjExpr objx, GeneratorAdapter gen) {
       gen.visitLineNumber(line, gen.mark());
-      gen.getStatic(Type.getType(c), fieldName, Type.getType(field.getType()));
+      gen.getStatic(getType(c), fieldName, Type.getType(field.getType()));
     }
 
     public void emit(C context, ObjExpr objx, GeneratorAdapter gen) {
       gen.visitLineNumber(line, gen.mark());
 
-      gen.getStatic(Type.getType(c), fieldName, Type.getType(field.getType()));
+      gen.getStatic(getType(c), fieldName, getType(field.getType()));
       // if(context != C.STATEMENT)
       HostExpr.emitBoxReturn(objx, gen, field.getType());
       if (context == C.STATEMENT) {
@@ -1255,13 +1279,17 @@ public class HydraCompiler implements Opcodes {
       return Reflector.setStaticField(c, fieldName, val.eval());
     }
 
-    public void emitAssign(C context, ObjExpr objx, GeneratorAdapter gen,
-        Expr val) {
+    public void emitAssign(C context, ObjExpr objx, GeneratorAdapter gen, Expr val) {
+      if (Modifier.isFinal(field.getModifiers()) && !((Boolean)ALLOW_SETTING_FINALS.deref()
+          && getType(c).getClassName().equals(DEFINING_CLASS.deref()))) {
+        throw new UnsupportedOperationException("Cannot assign to non-mutable " + fieldName
+            + " in " + getType(c).getClassName());
+      }
       gen.visitLineNumber(line, gen.mark());
       val.emit(C.EXPRESSION, objx, gen);
       gen.dup();
       HostExpr.emitUnboxArg(objx, gen, field.getType());
-      gen.putStatic(Type.getType(c), fieldName, Type.getType(field.getType()));
+      gen.putStatic(getType(c), fieldName, getType(field.getType()));
       if (context == C.STATEMENT)
         gen.pop();
     }
@@ -1374,9 +1402,17 @@ public class HydraCompiler implements Opcodes {
       this.methodName = methodName;
       this.target = target;
       this.tag = tag;
+
       if (target.hasJavaClass() && target.getJavaClass() != null) {
-        List methods = Reflector.getMethods(target.getJavaClass(),
-            args.count(), methodName, false);
+        List methods = Reflector.getMethods(target.getJavaClass(), args.count(), methodName, false);
+
+        if (methods.isEmpty() && DEFINING_CLASS.deref() != null) {
+          String owner = (String)DEFINING_CLASS.deref();
+          if (target.getJavaClass().getName().equals(owner) || destubClassName(target.getJavaClass().getName()).equals(owner)) {
+            methods = IconoclastReflector.getMethods(target.getJavaClass(), args.count(), methodName, false, true, true);
+          }
+        }
+
         if (methods.isEmpty()) {
           method = null;
           if (RT.booleanCast(RT.WARN_ON_REFLECTION.deref())) {
@@ -1392,17 +1428,14 @@ public class HydraCompiler implements Opcodes {
             ArrayList<Class[]> params = new ArrayList();
             ArrayList<Class> rets = new ArrayList();
             for (int i = 0; i < methods.size(); i++) {
-              java.lang.reflect.Method m = (java.lang.reflect.Method) methods
-                  .get(i);
+              java.lang.reflect.Method m = (java.lang.reflect.Method) methods.get(i);
               params.add(m.getParameterTypes());
               rets.add(m.getReturnType());
             }
             methodidx = getMatchingParams(methodName, params, args, rets);
           }
-          java.lang.reflect.Method m = (java.lang.reflect.Method) (methodidx >= 0 ? methods
-              .get(methodidx) : null);
-          if (m != null
-              && !Modifier.isPublic(m.getDeclaringClass().getModifiers())) {
+          java.lang.reflect.Method m = (java.lang.reflect.Method) (methodidx >= 0 ? methods.get(methodidx) : null);
+          if (m != null && !Modifier.isPublic(m.getDeclaringClass().getModifiers())) {
             // public method of non-public class, try to find it in hierarchy
             m = Reflector.getAsMethodOfPublicBase(m.getDeclaringClass(), m);
           }
@@ -1454,7 +1487,12 @@ public class HydraCompiler implements Opcodes {
     public void emitUnboxed(C context, ObjExpr objx, GeneratorAdapter gen) {
       gen.visitLineNumber(line, gen.mark());
       if (method != null) {
-        Type type = Type.getType(method.getDeclaringClass());
+        Type type = null;
+        if (Modifier.isProtected(method.getModifiers())) {
+          type = getType(target.getJavaClass());
+        } else {
+          type = getType(method.getDeclaringClass());
+        }
         target.emit(C.EXPRESSION, objx, gen);
         // if(!method.getDeclaringClass().isInterface())
         gen.checkCast(type);
@@ -1477,8 +1515,14 @@ public class HydraCompiler implements Opcodes {
     public void emit(C context, ObjExpr objx, GeneratorAdapter gen) {
       gen.visitLineNumber(line, gen.mark());
       if (method != null) {
-        Type type = Type.getType(method.getDeclaringClass());
         target.emit(C.EXPRESSION, objx, gen);
+        Type type = null;
+        if (Modifier.isProtected(method.getModifiers())) {
+          type = getType(target.getJavaClass());
+        } else {
+          type = getType(method.getDeclaringClass());
+          gen.checkCast(type);
+        }
         // if(!method.getDeclaringClass().isInterface())
         gen.checkCast(type);
         MethodExpr.emitTypedArgs(objx, gen, method.getParameterTypes(), args);
@@ -1543,8 +1587,23 @@ public class HydraCompiler implements Opcodes {
       this.tag = tag;
 
       List methods = Reflector.getMethods(c, args.count(), methodName, true);
-      if (methods.isEmpty())
+
+      if (methods.isEmpty() && DEFINING_CLASS.deref() != null) {
+        String owner = (String)DEFINING_CLASS.deref();
+        //TODO
+        Class ownerClass = RT.classForName(COMPILE_STUB_PREFIX + "." + owner);
+
+        if (c.getName().equals(owner) || destubClassName(c.getName()).equals(owner)) {
+          methods = IconoclastReflector.getMethods(c, args.count(), methodName, true, true, true);
+        } else if (c.isAssignableFrom(ownerClass)) {
+            //|| ownerClass.isAssignableFrom(c)) { //won't happen now
+          methods = IconoclastReflector.getMethods(c, args.count(), methodName, true, true, false);
+        }
+      }
+
+      if (methods.isEmpty()) {
         throw new IllegalArgumentException("No matching method: " + methodName);
+      }
 
       int methodidx = 0;
       if (methods.size() > 1) {
@@ -1558,8 +1617,7 @@ public class HydraCompiler implements Opcodes {
         }
         methodidx = getMatchingParams(methodName, params, args, rets);
       }
-      method = (java.lang.reflect.Method) (methodidx >= 0 ? methods
-          .get(methodidx) : null);
+      method = (java.lang.reflect.Method) (methodidx >= 0 ? methods.get(methodidx) : null);
       if (method == null && RT.booleanCast(RT.WARN_ON_REFLECTION.deref())) {
         RT.errPrintWriter()
             .format(
@@ -1633,7 +1691,7 @@ public class HydraCompiler implements Opcodes {
           } else
             gen.visitInsn((Integer) ops);
         } else {
-          Type type = Type.getType(c);
+          Type type = getType(c);
           Method m = new Method(methodName, Type.getReturnType(method),
               Type.getArgumentTypes(method));
           gen.invokeStatic(type, m);
@@ -1652,7 +1710,7 @@ public class HydraCompiler implements Opcodes {
           ObjMethod method = (ObjMethod) METHOD.deref();
           method.emitClearLocals(gen);
         }
-        Type type = Type.getType(c);
+        Type type = getType(c);
         Method m = new Method(methodName, Type.getReturnType(method),
             Type.getArgumentTypes(method));
         gen.invokeStatic(type, m);
@@ -1667,7 +1725,7 @@ public class HydraCompiler implements Opcodes {
           HostExpr.emitBoxReturn(objx, gen, method.getReturnType());
         }
       } else {
-        gen.push(c.getName());
+        gen.push(destubClassName(c.getName()));
         gen.invokeStatic(CLASS_TYPE, forNameMethod);
         gen.push(methodName);
         emitArgsAsArray(args, objx, gen);
@@ -3830,7 +3888,8 @@ public class HydraCompiler implements Opcodes {
     ObjExprType exprType;
     int classAccess;
     boolean skipDefaultCtors;
-    
+    boolean skipDefaultStaticBlock;
+
     public final String name() {
       return name;
     }
@@ -3922,12 +3981,11 @@ public class HydraCompiler implements Opcodes {
           .vector(IPERSISTENTMAP_TYPE);
       for (ISeq s = RT.keys(closes); s != null; s = s.next()) {
         LocalBinding lb = (LocalBinding) s.first();
-        //skip statics
-        if (lb.sym.meta() == null || !lb.sym.meta().containsKey(ACCESS_STATIC_FLAG)) {
+        if (!RT.booleanCast(RT.get(RT.meta(lb.sym), ACCESS_STATIC_FLAG))) {
           if (lb.getPrimitiveType() != null) {
             tv = tv.cons(Type.getType(lb.getPrimitiveType()));
           } else {
-            tv = tv.cons(getTagType(internalName, isDefclass(), lb));
+            tv = tv.cons(tagType(lb, internalName, isDefclass()));
           }
         }
       }
@@ -3936,8 +3994,8 @@ public class HydraCompiler implements Opcodes {
         ret[i] = (Type) tv.nth(i);
       return ret;
     }
-        
-    Type[] ctorTypes(ISeq params, boolean matchWithCloses) {
+
+    Type[] ctorTypes(ISeq params, boolean addStub) {
       IPersistentVector tv = PersistentVector.EMPTY;
       IPersistentMap m = PersistentHashMap.EMPTY;
       for (ISeq s = RT.keys(closes); s != null; s = s.next()) {
@@ -3946,37 +4004,25 @@ public class HydraCompiler implements Opcodes {
       }
       for (ISeq s = params; s != null; s = s.next()) {
         Symbol param = (Symbol) s.first();
-        if (matchWithCloses) {
-          if (m.containsKey(param.name)) {
-            LocalBinding lb = (LocalBinding)RT.get(m, param.name);
-            if (lb.getPrimitiveType() != null) {
-              tv = tv.cons(Type.getType(lb.getPrimitiveType()));
+        Type t = OBJECT_TYPE;
+        if (param.meta() != null) {
+          Symbol hint = (Symbol)RT.get(param.meta(), Keyword.intern("tag"));
+          if (hint != null) {
+            if (tagEqualsInternalName(hint, internalName)) {
+              t = !addStub ? tagType(hint) : stubTagType(param, internalName);
             } else {
-              tv = tv.cons(getTagType(internalName, isDefclass(), lb));
+              t = Type.getType(HostExpr.tagToClass(hint));
             }
-          }  
-        } else {
-          Type t = OBJECT_TYPE;
-          if (param.meta() != null) {
-            Symbol hint = (Symbol)RT.get(param.meta(), Keyword.intern("tag"));
-            if (hint != null) {
-              if (internalNameFromType(hint.name).equals(internalName)) {
-                t = tagType(hint);
-              } else {
-                t = Type.getType(HostExpr.tagToClass(hint));
-              }
-            }
-          } 
-          tv = tv.cons(t);
+          }
         }
-        
+        tv = tv.cons(t);
       }
       Type[] ret = new Type[tv.count()];
       for (int i = 0; i < tv.count(); i++)
         ret[i] = (Type) tv.nth(i);
       return ret;
     }
-    
+
     void compile(String superName, String[] interfaceNames, boolean oneTimeUse)
         throws IOException {
       // create bytecode for a class
@@ -4042,42 +4088,21 @@ public class HydraCompiler implements Opcodes {
       // }
 
       // static init for constants, keywords and vars
-      GeneratorAdapter clinitgen = new GeneratorAdapter(
-          ACC_PUBLIC + ACC_STATIC, Method.getMethod("void <clinit> ()"), null,
-          null, cv);
-      clinitgen.visitCode();
-      clinitgen.visitLineNumber(line, clinitgen.mark());
-
-      if (constants.count() > 0) {
-        emitConstants(clinitgen);
+      if (!skipDefaultStaticBlock) {
+        GeneratorAdapter clinitgen = new GeneratorAdapter(ACC_PUBLIC + ACC_STATIC,
+            Method.getMethod("void <clinit> ()"), null, null, cv);
+        clinitgen.visitCode();
+        clinitgen.visitLineNumber(line, clinitgen.mark());
+        if (constants.count() > 0) {
+          emitConstants(clinitgen);
+        }
+        if (keywordCallsites.count() > 0) {
+          emitKeywordCallsites(clinitgen);
+        }
+        clinitgen.returnValue();
+        clinitgen.endMethod();
       }
 
-      if (keywordCallsites.count() > 0)
-        emitKeywordCallsites(clinitgen);
-
-      /*
-       * for(int i=0;i<varCallsites.count();i++) { Label skipLabel =
-       * clinitgen.newLabel(); Label endLabel = clinitgen.newLabel(); Var var =
-       * (Var) varCallsites.nth(i); clinitgen.push(var.ns.name.toString());
-       * clinitgen.push(var.sym.toString()); clinitgen.invokeStatic(RT_TYPE,
-       * Method.getMethod("clojure.lang.Var var(String,String)"));
-       * clinitgen.dup(); clinitgen.invokeVirtual(VAR_TYPE,Method.getMethod
-       * ("boolean hasRoot()"));
-       * clinitgen.ifZCmp(GeneratorAdapter.EQ,skipLabel);
-       * 
-       * clinitgen.invokeVirtual(VAR_TYPE,Method.getMethod("Object getRoot()"
-       * )); clinitgen.dup(); clinitgen.instanceOf(AFUNCTION_TYPE);
-       * clinitgen.ifZCmp(GeneratorAdapter.EQ,skipLabel);
-       * clinitgen.checkCast(IFN_TYPE); clinitgen.putStatic(objtype,
-       * varCallsiteName(i), IFN_TYPE); clinitgen.goTo(endLabel);
-       * 
-       * clinitgen.mark(skipLabel); clinitgen.pop();
-       * 
-       * clinitgen.mark(endLabel); }
-       */
-      clinitgen.returnValue();
-
-      clinitgen.endMethod();
       if (supportsMeta()) {
         cv.visitField(ACC_FINAL, "__meta", IPERSISTENTMAP_TYPE.getDescriptor(),
             null, null);
@@ -4096,7 +4121,7 @@ public class HydraCompiler implements Opcodes {
                 .visitField(access, lb.name, Type
                     .getType(lb.getPrimitiveType()).getDescriptor(), null, null);
           } else {
-            String desc = getTagType(internalName, isDefclass(), lb).getDescriptor();   
+            String desc = tagType(lb, internalName, isDefclass()).getDescriptor();
             // todo - when closed-overs are fields, use more specific types here
             // and in ctor and emitLocal?
             fv = cv.visitField(access, lb.name, desc, null, null);
@@ -4120,154 +4145,13 @@ public class HydraCompiler implements Opcodes {
             CLASS_TYPE.getDescriptor(), null, null);
       }
 
-      if (!skipDefaultCtors) { 
+      if (!skipDefaultCtors) {
         //default ctor generation
-        //TODO move to separate methods or something to make more readable
-        
-        // ctor that takes closed-overs and inits base + fields
-        Method m = new Method("<init>", Type.VOID_TYPE, ctorTypes());
-        GeneratorAdapter ctorgen = new GeneratorAdapter(ACC_PUBLIC, m, null,
-            null, cv);
-        Label start = ctorgen.newLabel();
-        Label end = ctorgen.newLabel();
-        ctorgen.visitCode();
-        ctorgen.visitLineNumber(line, ctorgen.mark());
-        ctorgen.visitLabel(start);
-        ctorgen.loadThis();
-        // if(superName != null)
-        ctorgen.invokeConstructor(Type.getObjectType(superName), voidctor);
-        // else if(isVariadic()) //RestFn ctor takes reqArity arg
-        // {
-        // ctorgen.push(variadicMethod.reqParms.count());
-        // ctorgen.invokeConstructor(restFnType, restfnctor);
-        // }
-        // else
-        // ctorgen.invokeConstructor(aFnType, voidctor);
-  
-        // if(vars.count() > 0)
-        // {
-        // ctorgen.loadThis();
-        // ctorgen.getStatic(VAR_TYPE,"rev",Type.INT_TYPE);
-        // ctorgen.push(-1);
-        // ctorgen.visitInsn(Opcodes.IADD);
-        // ctorgen.putField(objtype, "__varrev__", Type.INT_TYPE);
-        // }
-  
-        if (supportsMeta()) {
-          ctorgen.loadThis();
-          ctorgen.visitVarInsn(IPERSISTENTMAP_TYPE.getOpcode(Opcodes.ILOAD), 1);
-          ctorgen.putField(objtype, "__meta", IPERSISTENTMAP_TYPE);
-        }
-  
-        int a = supportsMeta() ? 2 : 1;
-        for (ISeq s = RT.keys(closes); s != null; s = s.next(), ++a) {
-          LocalBinding lb = (LocalBinding) s.first();
-          if (lb.sym.meta() != null && lb.sym.meta().containsKey(ACCESS_STATIC_FLAG)) {
-            --a;
-            continue;
-          }
-          ctorgen.loadThis();
-          Class primc = lb.getPrimitiveType();
-          if (primc != null) {
-            ctorgen.visitVarInsn(Type.getType(primc).getOpcode(Opcodes.ILOAD), a);
-            ctorgen.putField(objtype, lb.name, Type.getType(primc));
-            if (primc == Long.TYPE || primc == Double.TYPE)
-              ++a;
-          } else {
-            Type t = isDefclass() ? Type.getType(lb.getJavaClass()) : OBJECT_TYPE;
-            ctorgen.visitVarInsn(t.getOpcode(Opcodes.ILOAD), a);
-            ctorgen.putField(objtype, lb.name, t);
-          }
-          closesExprs = closesExprs.cons(new LocalBindingExpr(lb, null));
-        }
-  
-        ctorgen.visitLabel(end);
-  
-        ctorgen.returnValue();
-  
-        ctorgen.endMethod();
-  
-        if (altCtorDrops > 0) {
-          // ctor that takes closed-overs and inits base + fields
-          Type[] ctorTypes = ctorTypes();
-          Type[] altCtorTypes = new Type[ctorTypes.length - altCtorDrops];
-          for (int i = 0; i < altCtorTypes.length; i++)
-            altCtorTypes[i] = ctorTypes[i];
-          Method alt = new Method("<init>", Type.VOID_TYPE, altCtorTypes);
-          ctorgen = new GeneratorAdapter(ACC_PUBLIC, alt, null, null, cv);
-          ctorgen.visitCode();
-          ctorgen.loadThis();
-          ctorgen.loadArgs();
-          for (int i = 0; i < altCtorDrops; i++)
-            ctorgen.visitInsn(Opcodes.ACONST_NULL);
-  
-          ctorgen.invokeConstructor(objtype, new Method("<init>", Type.VOID_TYPE,
-              ctorTypes));
-  
-          ctorgen.returnValue();
-          ctorgen.endMethod();
-        }
-  
-        if (supportsMeta()) {
-          // ctor that takes closed-overs but not meta
-          Type[] ctorTypes = ctorTypes();
-          Type[] noMetaCtorTypes = new Type[ctorTypes.length - 1];
-          for (int i = 1; i < ctorTypes.length; i++)
-            noMetaCtorTypes[i - 1] = ctorTypes[i];
-          Method alt = new Method("<init>", Type.VOID_TYPE, noMetaCtorTypes);
-          ctorgen = new GeneratorAdapter(ACC_PUBLIC, alt, null, null, cv);
-          ctorgen.visitCode();
-          ctorgen.loadThis();
-          ctorgen.visitInsn(Opcodes.ACONST_NULL); // null meta
-          ctorgen.loadArgs();
-          ctorgen.invokeConstructor(objtype, new Method("<init>", Type.VOID_TYPE,
-              ctorTypes));
-  
-          ctorgen.returnValue();
-          ctorgen.endMethod();
-  
-          // meta()
-          Method meth = Method.getMethod("clojure.lang.IPersistentMap meta()");
-  
-          GeneratorAdapter gen = new GeneratorAdapter(ACC_PUBLIC, meth, null,
-              null, cv);
-          gen.visitCode();
-          gen.loadThis();
-          gen.getField(objtype, "__meta", IPERSISTENTMAP_TYPE);
-  
-          gen.returnValue();
-          gen.endMethod();
-  
-          // withMeta()
-          meth = Method
-              .getMethod("clojure.lang.IObj withMeta(clojure.lang.IPersistentMap)");
-  
-          gen = new GeneratorAdapter(ACC_PUBLIC, meth, null, null, cv);
-          gen.visitCode();
-          gen.newInstance(objtype);
-          gen.dup();
-          gen.loadArg(0);
-  
-          for (ISeq s = RT.keys(closes); s != null; s = s.next(), ++a) {
-            LocalBinding lb = (LocalBinding) s.first();
-            gen.loadThis();
-            Class primc = lb.getPrimitiveType();
-            if (primc != null) {
-              gen.getField(objtype, lb.name, Type.getType(primc));
-            } else {
-              gen.getField(objtype, lb.name, OBJECT_TYPE);
-            }
-          }
-  
-          gen.invokeConstructor(objtype, new Method("<init>", Type.VOID_TYPE,
-              ctorTypes));
-          gen.returnValue();
-          gen.endMethod();
-        }
+        emitDefaultCtors(cv, superName);
       } else {
         emitCtors(cv);
       }
-        
+
       emitStatics(cv);
       emitMethods(cv);
 
@@ -4332,8 +4216,134 @@ public class HydraCompiler implements Opcodes {
 
     protected void emitMethods(ClassVisitor gen) {
     }
-    
+
     protected void emitCtors(ClassVisitor gen) {
+    }
+
+    private void emitDefaultCtors(ClassVisitor cv, String superName) {
+      //default ctor generation
+
+      // ctor that takes closed-overs and inits base + fields
+      Method m = new Method("<init>", Type.VOID_TYPE, ctorTypes());
+      GeneratorAdapter ctorgen = new GeneratorAdapter(ACC_PUBLIC, m, null,
+          null, cv);
+      Label start = ctorgen.newLabel();
+      Label end = ctorgen.newLabel();
+      ctorgen.visitCode();
+      ctorgen.visitLineNumber(line, ctorgen.mark());
+      ctorgen.visitLabel(start);
+      ctorgen.loadThis();
+      ctorgen.invokeConstructor(Type.getObjectType(superName), voidctor);
+
+      if (supportsMeta()) {
+        ctorgen.loadThis();
+        ctorgen.visitVarInsn(IPERSISTENTMAP_TYPE.getOpcode(Opcodes.ILOAD), 1);
+        ctorgen.putField(objtype, "__meta", IPERSISTENTMAP_TYPE);
+      }
+
+      int a = supportsMeta() ? 2 : 1;
+      for (ISeq s = RT.keys(closes); s != null; s = s.next(), ++a) {
+        LocalBinding lb = (LocalBinding) s.first();
+        if (RT.booleanCast(RT.get(RT.meta(lb.sym), ACCESS_STATIC_FLAG))) {
+          --a;
+          continue;
+        }
+        ctorgen.loadThis();
+        Class primc = lb.getPrimitiveType();
+        if (primc != null) {
+          ctorgen.visitVarInsn(Type.getType(primc).getOpcode(Opcodes.ILOAD), a);
+          ctorgen.putField(objtype, lb.name, Type.getType(primc));
+          if (primc == Long.TYPE || primc == Double.TYPE)
+            ++a;
+        } else {
+          Type t = tagType(lb, internalName, isDefclass());
+          ctorgen.visitVarInsn(t.getOpcode(Opcodes.ILOAD), a);
+          ctorgen.putField(objtype, lb.name, t);
+        }
+        closesExprs = closesExprs.cons(new LocalBindingExpr(lb, null));
+      }
+
+      ctorgen.visitLabel(end);
+      ctorgen.returnValue();
+      ctorgen.endMethod();
+
+      if (altCtorDrops > 0) {
+        // ctor that takes closed-overs and inits base + fields
+        Type[] ctorTypes = ctorTypes();
+        Type[] altCtorTypes = new Type[ctorTypes.length - altCtorDrops];
+        for (int i = 0; i < altCtorTypes.length; i++)
+          altCtorTypes[i] = ctorTypes[i];
+        Method alt = new Method("<init>", Type.VOID_TYPE, altCtorTypes);
+        ctorgen = new GeneratorAdapter(ACC_PUBLIC, alt, null, null, cv);
+        ctorgen.visitCode();
+        ctorgen.loadThis();
+        ctorgen.loadArgs();
+        for (int i = 0; i < altCtorDrops; i++)
+          ctorgen.visitInsn(Opcodes.ACONST_NULL);
+
+        ctorgen.invokeConstructor(objtype, new Method("<init>", Type.VOID_TYPE,
+            ctorTypes));
+
+        ctorgen.returnValue();
+        ctorgen.endMethod();
+      }
+
+      if (supportsMeta()) {
+        // ctor that takes closed-overs but not meta
+        Type[] ctorTypes = ctorTypes();
+        Type[] noMetaCtorTypes = new Type[ctorTypes.length - 1];
+        for (int i = 1; i < ctorTypes.length; i++)
+          noMetaCtorTypes[i - 1] = ctorTypes[i];
+        Method alt = new Method("<init>", Type.VOID_TYPE, noMetaCtorTypes);
+        ctorgen = new GeneratorAdapter(ACC_PUBLIC, alt, null, null, cv);
+        ctorgen.visitCode();
+        ctorgen.loadThis();
+        ctorgen.visitInsn(Opcodes.ACONST_NULL); // null meta
+        ctorgen.loadArgs();
+        ctorgen.invokeConstructor(objtype, new Method("<init>", Type.VOID_TYPE,
+            ctorTypes));
+
+        ctorgen.returnValue();
+        ctorgen.endMethod();
+
+        // meta()
+        Method meth = Method.getMethod("clojure.lang.IPersistentMap meta()");
+
+        GeneratorAdapter gen = new GeneratorAdapter(ACC_PUBLIC, meth, null,
+            null, cv);
+        gen.visitCode();
+        gen.loadThis();
+        gen.getField(objtype, "__meta", IPERSISTENTMAP_TYPE);
+
+        gen.returnValue();
+        gen.endMethod();
+
+        // withMeta()
+        meth = Method
+            .getMethod("clojure.lang.IObj withMeta(clojure.lang.IPersistentMap)");
+
+        gen = new GeneratorAdapter(ACC_PUBLIC, meth, null, null, cv);
+        gen.visitCode();
+        gen.newInstance(objtype);
+        gen.dup();
+        gen.loadArg(0);
+
+        for (ISeq s = RT.keys(closes); s != null; s = s.next(), ++a) {
+          LocalBinding lb = (LocalBinding) s.first();
+          gen.loadThis();
+          Class primc = lb.getPrimitiveType();
+          if (primc != null) {
+            gen.getField(objtype, lb.name, Type.getType(primc));
+          } else {
+            gen.getField(objtype, lb.name, OBJECT_TYPE);
+          }
+        }
+
+        gen.invokeConstructor(objtype, new Method("<init>", Type.VOID_TYPE,
+            ctorTypes));
+        gen.returnValue();
+        gen.endMethod();
+      }
     }
 
     void emitListAsObjectArray(Object value, GeneratorAdapter gen) {
@@ -4554,12 +4564,11 @@ public class HydraCompiler implements Opcodes {
           && RT.booleanCast(RT.get(lb.sym.meta(),
               Keyword.intern("volatile-mutable")));
     }
-    
-    //maybe both could be changed to Modifer/isStatic, isAbstract from calculated opcodes
+
     boolean isStatic(Symbol s) {
       return isDefclass() && RT.booleanCast(RT.get(s.meta(), ACCESS_STATIC_FLAG));
     }
-    
+
     boolean isAbstract(Symbol s) {
       return isDefclass() && RT.booleanCast(RT.get(s.meta(), ACCESS_ABSTRACT_FLAG));
     }
@@ -4567,7 +4576,7 @@ public class HydraCompiler implements Opcodes {
     boolean isDeftype() {
       return fields != null;
     }
-    
+
     boolean isDefclass() {
       return ObjExprType.DEFCLASS.equals(exprType);
     }
@@ -4577,27 +4586,10 @@ public class HydraCompiler implements Opcodes {
     }
 
     void emitClearCloses(GeneratorAdapter gen) {
-      // int a = 1;
-      // for(ISeq s = RT.keys(closes); s != null; s = s.next(), ++a)
-      // {
-      // LocalBinding lb = (LocalBinding) s.first();
-      // Class primc = lb.getPrimitiveType();
-      // if(primc == null)
-      // {
-      // gen.loadThis();
-      // gen.visitInsn(Opcodes.ACONST_NULL);
-      // gen.putField(objtype, lb.name, OBJECT_TYPE);
-      // }
-      // }
     }
 
     synchronized Class getCompiledClass() {
-      if (compiledClass == null)
-      // if(RT.booleanCast(COMPILE_FILES.deref()))
-      // compiledClass = RT.classForName(name);//loader.defineClass(name,
-      // bytecode);
-      // else
-      {
+      if (compiledClass == null) {
         loader = (DynamicClassLoader) LOADER.deref();
         compiledClass = loader.defineClass(name, bytecode, src);
       }
@@ -4677,13 +4669,14 @@ public class HydraCompiler implements Opcodes {
       if (!isMutable(lb) && !lb.skipMutableChecks) {
         throw new IllegalArgumentException("Cannot assign to non-mutable: " + lb.name);
       }
+
       lb.skipMutableChecks = false;
       Class primc = lb.getPrimitiveType();
       boolean isLbStatic = isStatic(lb.sym);
       //can load only when not static
       if (!isLbStatic) {
         gen.loadThis();
-      } 
+      }
       if (primc != null) {
         if (!(val instanceof MaybePrimitiveExpr && ((MaybePrimitiveExpr) val).canEmitPrimitive())) {
           throw new IllegalArgumentException("Must assign primitive to primitive mutable: " + lb.name);
@@ -4696,12 +4689,12 @@ public class HydraCompiler implements Opcodes {
           gen.putStatic(objtype, lb.name, Type.getType(primc));
         }
       } else {
-        Type t = getTagType(internalName, isDefclass(), lb);
+        Type t = tagType(lb, internalName, isDefclass());
         val.emit(C.EXPRESSION, this, gen);
         if (t != OBJECT_TYPE) {
           gen.checkCast(t);
         }
-        
+
         if (!isLbStatic) {
           gen.putField(objtype, lb.name, t);
         } else {
@@ -4716,7 +4709,7 @@ public class HydraCompiler implements Opcodes {
         boolean isLbStatic = isStatic(lb.sym);
         if (!isLbStatic) {
           gen.loadThis();
-        } 
+        }
         if (primc != null) {
           if (!isLbStatic) {
             gen.getField(objtype, lb.name, Type.getType(primc));
@@ -4725,14 +4718,14 @@ public class HydraCompiler implements Opcodes {
           }
           HostExpr.emitBoxReturn(this, gen, primc);
         } else {
-          Type t = getTagType(internalName, isDefclass(), lb);
+          Type t = tagType(lb, internalName, isDefclass());
 
           if (!isLbStatic) {
             gen.getField(objtype, lb.name, t);
           } else {
             gen.getStatic(objtype, lb.name, t);
           }
-          
+
           //should this be also changed to putStatic?
           if (onceOnly && clear && lb.canBeCleared) {
             gen.loadThis();
@@ -5296,6 +5289,7 @@ public class HydraCompiler implements Opcodes {
     PersistentHashSet localsUsedInCatchFinally = PersistentHashSet.EMPTY;
     protected IPersistentMap methodMeta;
     boolean skipCode;
+    boolean isStaticInit;
 
     public final IPersistentMap locals() {
       return locals;
@@ -5361,13 +5355,13 @@ public class HydraCompiler implements Opcodes {
           gen.unbox(Type.getType(retClass));
       }
     }
-    
+
     static void emitBody(ObjExpr objx, GeneratorAdapter gen, Type retType, Expr body) {
       //only when retClass does not exists yet
       body.emit(C.RETURN, objx, gen);
       gen.unbox(retType);
     }
-    
+
     abstract int numParams();
 
     abstract String getMethodName();
@@ -5438,6 +5432,13 @@ public class HydraCompiler implements Opcodes {
         }
       }
     }
+
+    protected void setArgLocalsCanBeCleared(boolean canBeCleared) {
+      for (int i = 0;  i < argLocals.count(); i++) {
+        LocalBinding lb = (LocalBinding) argLocals.nth(i);
+        lb.canBeCleared = canBeCleared;
+      }
+    }
   }
 
   public static class LocalBinding {
@@ -5451,7 +5452,7 @@ public class HydraCompiler implements Opcodes {
     public boolean canBeCleared = !RT
         .booleanCast(getCompilerOption(disableLocalsClearingKey));
     public boolean recurMistmatch = false;
-    
+
     public boolean skipMutableChecks = false;
 
     public LocalBinding(int num, Symbol sym, Symbol tag, Expr init,
@@ -5483,7 +5484,7 @@ public class HydraCompiler implements Opcodes {
     public Class getPrimitiveType() {
       return maybePrimitiveType(init);
     }
-    
+
     public boolean tagMatchesClass(String classname) {
       return tag != null && classname.equals(tag.name);
     }
@@ -5499,9 +5500,9 @@ public class HydraCompiler implements Opcodes {
     public boolean shouldClear = false;
 
     public LocalBindingExpr(LocalBinding b, Symbol tag) {
-      if (b.getPrimitiveType() != null && tag != null)
-        throw new UnsupportedOperationException(
-            "Can't type hint a primitive local");
+      if (b.getPrimitiveType() != null && tag != null) {
+        throw new UnsupportedOperationException("Can't type hint a primitive local");
+      }
       this.b = b;
       this.tag = tag;
 
@@ -5555,8 +5556,7 @@ public class HydraCompiler implements Opcodes {
       throw new UnsupportedOperationException("Can't eval locals");
     }
 
-    public void emitAssign(C context, ObjExpr objx, GeneratorAdapter gen,
-        Expr val) {
+    public void emitAssign(C context, ObjExpr objx, GeneratorAdapter gen, Expr val) {
       objx.emitAssignLocal(gen, b, val);
       if (context != C.STATEMENT)
         objx.emitLocal(gen, b, false);
@@ -6149,8 +6149,7 @@ public class HydraCompiler implements Opcodes {
   private static LocalBinding registerLocal(Symbol sym, Symbol tag, Expr init,
       boolean isArg) {
     int num = getAndIncLocalNum();
-    LocalBinding b = new LocalBinding(num, sym, tag, init, isArg,
-        clearPathRoot());
+    LocalBinding b = new LocalBinding(num, sym, tag, init, isArg, clearPathRoot());
     IPersistentMap localsMap = (IPersistentMap) LOCAL_ENV.deref();
     LOCAL_ENV.set(RT.assoc(localsMap, b.sym, b));
     ObjMethod method = (ObjMethod) METHOD.deref();
@@ -6566,9 +6565,21 @@ public class HydraCompiler implements Opcodes {
         Symbol nsSym = Symbol.intern(sym.ns);
         Class c = HostExpr.maybeClass(nsSym, false);
         if (c != null) {
-          if (Reflector.getField(c, sym.name, true) != null)
-            return new StaticFieldExpr(lineDeref(), columnDeref(), c, sym.name,
-                tag);
+          if (Reflector.getField(c, sym.name, true) != null) {
+            return new StaticFieldExpr(lineDeref(), columnDeref(), c, sym.name, tag);
+          } else {
+            if (DEFINING_CLASS.deref() != null) {
+              String owner = (String)DEFINING_CLASS.deref();
+              //TODO refactor
+              Class ownerClass = RT.classForName(COMPILE_STUB_PREFIX + "." + owner);
+              if (((c.getName().equals(owner) || destubClassName(c.getName()).equals(owner))
+                     && IconoclastReflector.getField(c, sym.name, true, true, true) != null)
+                  || (c.isAssignableFrom(ownerClass)
+                      && IconoclastReflector.getField(c, sym.name, true, true, false) != null)) {
+                return new StaticFieldExpr(lineDeref(), columnDeref(), c, sym.name, tag);
+              }
+            }
+          }
           throw Util.runtimeException("Unable to find static field: "
               + sym.name + " in " + c);
         }
@@ -6606,8 +6617,12 @@ public class HydraCompiler implements Opcodes {
 
   static Type getType(Class c) {
     String descriptor = Type.getType(c).getDescriptor();
-    if (descriptor.startsWith("L"))
+    if (descriptor.startsWith("L")) {
       descriptor = "L" + destubClassName(descriptor.substring(1));
+    } else if (descriptor.startsWith("[") && descriptor.indexOf('/') > 0) {
+      descriptor = descriptor.substring(0, descriptor.indexOf('L')+1)
+          + destubClassName(descriptor.substring(descriptor.indexOf('L')+1));
+    }
     return Type.getType(descriptor);
   }
 
@@ -7056,10 +7071,11 @@ public class HydraCompiler implements Opcodes {
     // IPersistentMap optionsMap = PersistentArrayMap.EMPTY;
     IPersistentCollection methods;
     IPersistentCollection ctors;
+    ISeq staticInit;
 
     Map<IPersistentVector, java.lang.reflect.Method> mmap;
     Map<IPersistentVector, Set<Class>> covariants;
-    
+
     public NewInstanceExpr(Object tag) {
       super(tag);
     }
@@ -7149,7 +7165,7 @@ public class HydraCompiler implements Opcodes {
       ret.internalName = ret.name.replace('.', '/');
       ret.objtype = Type.getObjectType(ret.internalName);
       ret.exprType = exprType;
-      
+
       if (thisSym != null) {
         ret.thisName = thisSym.name;
       }
@@ -7162,7 +7178,7 @@ public class HydraCompiler implements Opcodes {
           Symbol tag = tagOf(sym);
           MethodParamExpr mp = null;
           LocalBinding lb = null;
-          if (tag != null && internalNameFromType(tag.name).equals(ret.internalName)) {
+          if (tagEqualsInternalName(tag, ret.internalName)) {
             mp = new MethodParamExpr(Object.class);
             lb = new LocalBinding(-1, sym, tag, mp, false, null);
           } else {
@@ -7183,32 +7199,43 @@ public class HydraCompiler implements Opcodes {
                 .nth(i)).name.equals("__extmap")); --i)
           ret.altCtorDrops++;
       }
-      
+
       // split methods into ctors and methods
       // maybe move to clj and pass to parser already splitted
       ISeq ctorForms = PersistentList.EMPTY;
       if (ret.isDefclass()) {
         IPersistentVector ctors = PersistentVector.EMPTY;
         IPersistentVector methods = PersistentVector.EMPTY;
+
+        Keyword ctor = Keyword.intern("init");
+        Keyword staticBlock = Keyword.intern("static-init");
+
         for (ISeq s = methodForms; s != null; s = RT.next(s)) {
           ISeq form = (ISeq) RT.first(s);
           Symbol dotname = (Symbol) RT.first(form);
           Symbol name = (Symbol) Symbol.intern(null, munge(dotname.name)).withMeta(RT.meta(dotname));
-          
-          boolean customInit = name.meta() != null ? name.meta().containsKey(Keyword.intern("init")) : false;
+          IPersistentMap meta = name.meta() != null ? name.meta() : PersistentHashMap.EMPTY;
+          boolean isCustomInit = meta.containsKey(ctor);
+          boolean isStaticInit = meta.containsKey(staticBlock);
 
-          if (customInit) {
+          if (isCustomInit) {
             ctors = ctors.cons(form);
+          } else if (isStaticInit) {
+            if (ret.staticInit != null) {
+              throw new IllegalArgumentException("Only one static block is allowed in " + ret.name);
+            }
+            ret.staticInit = form;
           } else {
             methods = methods.cons(form);
           }
         }
-        
+
         methodForms = methods.seq();
         ctorForms = ctors.seq();
         ret.skipDefaultCtors = ctors.count() != 0;
+        ret.skipDefaultStaticBlock = ret.staticInit != null;
       }
-      
+
       // todo - set up volatiles
       // ret.volatiles =
       // PersistentHashSet.create(RT.seq(RT.get(ret.optionsMap,
@@ -7228,6 +7255,9 @@ public class HydraCompiler implements Opcodes {
               throw new IllegalArgumentException("only one extend is supported, had: " + superClass.getName()
                       + "; got: " + c.getName());
             }
+            if (Modifier.isFinal(superClass.getModifiers())) {
+              throw new IllegalArgumentException("cannot extend final class " + c.getName());
+            }
           } else {
             throw new IllegalArgumentException("only interfaces are supported, had: " + c.getName());
           }
@@ -7235,8 +7265,8 @@ public class HydraCompiler implements Opcodes {
           interfaces = interfaces.cons(c);
         }
       }
-      
-      Map[] mc = gatherMethods(superClass, RT.seq(interfaces), false);
+
+      Map[] mc = gatherMethods(superClass, RT.seq(interfaces));
       Map overrideables = mc[0];
       Map covariants = mc[1];
       ret.mmap = overrideables;
@@ -7245,19 +7275,19 @@ public class HydraCompiler implements Opcodes {
 
       String[] inames = interfaceNames(interfaces);
 
-      if (ret.isDefclass() && 
+      if (ret.isDefclass() &&
           (ctorForms == null || ctorForms.count() == 0) &&
-          superclassCount != 0 && 
+          superclassCount != 0 &&
           !hasNoArgCtor(superClass)) {
         throw new IllegalArgumentException("No noarg ctor in parent class: " + superClass.getName());
       }
 
       Class stub = compileStub(slashname(superClass), ret, inames, methodForms, ctorForms, frm);
       Symbol thistag = Symbol.intern(null, stub.getName());
-      
+
       //gather methods once again for compiled stub
       if (ret.isDefclass()) {
-        mc = gatherMethods(stub, RT.seq(interfaces), true);
+        mc = gatherMethods(stub, RT.seq(interfaces));
         overrideables = mc[0];
         covariants = mc[1];
         ret.mmap = overrideables;
@@ -7289,7 +7319,11 @@ public class HydraCompiler implements Opcodes {
               (ISeq) RT.first(s), thistag, overrideables);
           methods = RT.conj(methods, m);
         }
-        
+        if (ret.staticInit != null) {
+          NewInstanceMethod staticBlock = NewInstanceMethod.parse(ret, ret.staticInit, thistag, overrideables);
+          methods = RT.conj(methods, staticBlock);
+        }
+
         IPersistentCollection ctors = null;
         for (ISeq s = ctorForms; s != null; s = RT.next(s)) {
           NewCtor c = NewCtor.parse(ret, (ISeq) RT.first(s), thistag, superClass);
@@ -7310,7 +7344,7 @@ public class HydraCompiler implements Opcodes {
           Var.popThreadBindings();
         Var.popThreadBindings();
       }
-      
+
       try {
         ret.compile(slashname(superClass), inames, false);
       } catch (IOException e) {
@@ -7342,24 +7376,24 @@ public class HydraCompiler implements Opcodes {
           access = getFieldModifiersCodesSum(lb.sym);
         }
         if (lb.getPrimitiveType() != null) {
-          cv.visitField(access, lb.name, Type.getType(lb.getPrimitiveType())
-              .getDescriptor(), null, null);
+          cv.visitField(access, lb.name, Type.getType(lb.getPrimitiveType()).getDescriptor(), null, null);
         }
         else {
           // todo - when closed-overs are fields, use more specific types here
           // and in ctor and emitLocal?
-          String desc = OBJECT_TYPE.getDescriptor();   
+          String desc = OBJECT_TYPE.getDescriptor();
           if (ret.isDefclass()) {
-            if (lb.tagMatchesClass(dotname(ret.internalName))) {
-              desc =  tagType(Symbol.intern(COMPILE_STUB_PREFIX + "." +  lb.tag.name)).getDescriptor();
+            if (tagEqualsInternalName(lb.tag, ret.internalName)) {
+              desc = stubify(tagType(lb.tag)).getDescriptor();
             } else {
               desc = lb.getJavaClass() != null ? Type.getDescriptor(lb.getJavaClass()) : desc;
             }
+
           }
           cv.visitField(access, lb.name, desc, null, null);
         }
       }
-      
+
       if (ctorForms == null || ctorForms.count() == 0) {
         //default ctors
         // ctor that takes closed-overs and does nothing
@@ -7371,7 +7405,7 @@ public class HydraCompiler implements Opcodes {
         ctorgen.invokeConstructor(Type.getObjectType(superName), voidctor);
         ctorgen.returnValue();
         ctorgen.endMethod();
-  
+
         //when is it called? reify?
         if (ret.altCtorDrops > 0) {
           Type[] ctorTypes = ret.ctorTypes();
@@ -7385,11 +7419,11 @@ public class HydraCompiler implements Opcodes {
           ctorgen.loadArgs();
           for (int i = 0; i < ret.altCtorDrops; i++)
             ctorgen.visitInsn(Opcodes.ACONST_NULL);
-  
+
           ctorgen.invokeConstructor(
               Type.getObjectType(COMPILE_STUB_PREFIX + "/" + ret.internalName),
               new Method("<init>", Type.VOID_TYPE, ctorTypes));
-  
+
           ctorgen.returnValue();
           ctorgen.endMethod();
         }
@@ -7401,61 +7435,131 @@ public class HydraCompiler implements Opcodes {
           //for meta
           Symbol dotname = (Symbol) RT.first(form);
           IPersistentVector params = (IPersistentVector) RT.second(form);
-          
+
           ISeq body = RT.third(form) != null ? RT.next(form).next() : null;
-          boolean autogenerate = form.count() < 3;
           IPersistentVector superparams = null;
+          
           if (body != null && body.first() != null && body.first() instanceof IPersistentList) {
             IPersistentList l = (IPersistentList) body.first();
             Object o = RT.first(l);
+            
             if (o instanceof Symbol) {
               Symbol superctor = (Symbol)o;
               String supername = superctor.name;
-              if (supername.equals("super!") || supername.equals("this!")) {
+              if (superctor.equals(CTOR_SUPER) || superctor.equals(CTOR_THIS)){
                 superparams = PersistentVector.create(RT.next(l));
               }
             }
           }
-          
+
           if (params.count() == 0) {
             throw new IllegalArgumentException("Must supply at least one argument for 'this' in: " + dotname);
           }
           Symbol thisName = (Symbol) params.nth(0);
           params = RT.subvec(params, 1, params.count());
-          
-          Type[] typesFromNames = ret.ctorTypes(params.seq(), autogenerate);
-          if (typesFromNames.length != params.count()) {
-            throw new IllegalArgumentException("Cannot match names from ctor declaration with actual fields");
-          }
 
-          for (int i = 0; i < typesFromNames.length; i++) {
-            Type t = typesFromNames[i];
-            if (internalNameFromType(t.getInternalName()).equals(ret.internalName)) {
-              String desc = "";
-              if (t.getInternalName().startsWith("[")) {
-                desc += t.getInternalName().substring(0, t.getDimensions());
-              } 
-              desc += "L" + COMPILE_STUB_PREFIX + "/" + ret.internalName + ";";
-              typesFromNames[i] = Type.getType(desc);
+          int ctorAccess = getCtorModifiersCodesSum(dotname);
+
+          for (int i = 0; i < params.count(); i++) {
+            if (!(params.nth(i) instanceof Symbol)) {
+              throw new IllegalArgumentException("params must be Symbols");
             }
           }
+
+          Type[] typesFromNames = ret.ctorTypes(params.seq(), true);
+          if (typesFromNames.length != params.count()) {
+            throw new IllegalArgumentException("Cannot match names from ctor declaration for " + dotname
+                + " with actual fields. Supplied names: " + params
+                + "\nConsider adding ctor body to switch off autogeneration");
+          }
           
+          boolean isVarArg = dotname.meta().containsKey(ACCESS_VARARGS_FLAG);
+          if (isVarArg && (typesFromNames.length == 0 || !isTypeArray(typesFromNames[typesFromNames.length - 1]))) {
+            throw new IllegalArgumentException("last param in a vararg ctor must be an array: " +
+                ((Symbol)params.nth(params.length() - 1)).name + " in ctor " + params + " in " + ret.name);
+          }
+
           //voidctor is sufficient in stub, it will be changed to proper one in compile
           Method m = new Method("<init>", Type.VOID_TYPE, typesFromNames);
-          //TODO add support for flags
-          GeneratorAdapter ctorgen = new GeneratorAdapter(ACC_PUBLIC, m, null,null, cv);
+          GeneratorAdapter ctorgen = new GeneratorAdapter(ctorAccess, m, null,null, cv);
           ctorgen.visitCode();
           ctorgen.loadThis();
           ctorgen.invokeConstructor(Type.getObjectType(superName), voidctor);
           ctorgen.returnValue();
           ctorgen.endMethod();
-          
+
         }
       }
-            
+
+      if (ret.isDefclass()) {
+        //declared methods (needed at least for statics)
+        for (ISeq s = methodForms; s != null; s = RT.next(s)) {
+          ISeq form = (ISeq) RT.first(s);
+          Symbol dotname = (Symbol) RT.first(form);
+          Symbol name = (Symbol) Symbol.intern(null, munge(dotname.name)).withMeta(RT.meta(dotname));
+
+          if (RT.booleanCast(RT.get(RT.meta(name), Keyword.intern("defm")))) {
+            IPersistentVector params = (IPersistentVector) RT.second(form);
+            if (!ret.isStatic(dotname)) {
+              if (params.count() == 0) {
+                throw new IllegalArgumentException("Must supply at least one argument for 'this' in: " + dotname);
+              }
+              params = RT.subvec(params, 1, params.count());
+            }
+
+            int methodAccess = getMethodModifiersCodesSum(dotname);
+
+            Type[] argTypes = new Type[params.count()];
+
+            boolean paramHinted = false;
+            for (int i = 0; i < params.count(); i++) {
+              if (!(params.nth(i) instanceof Symbol)) {
+                throw new IllegalArgumentException("params must be Symbols");
+              }
+              Symbol p = (Symbol) params.nth(i);
+              argTypes[i] = stubTagType(p, ret.internalName);
+            }
+
+            boolean isVarArg = name.meta().containsKey(ACCESS_VARARGS_FLAG);
+            if (isVarArg && !isTypeArray(argTypes[argTypes.length - 1])) {
+              throw new IllegalArgumentException("last param in a vararg method must be an array: " +
+                  ((Symbol)params.nth(params.length() - 1)).name + " in " + name + " in " + ret.name);
+            }
+
+            Type r = stubTagType(name, ret.internalName);
+            Method declaredMethod = new Method(name.name, r, argTypes);
+            GeneratorAdapter methodGen = new GeneratorAdapter(methodAccess, declaredMethod, null, null, cv);
+
+            if (!name.meta().containsKey(ACCESS_ABSTRACT_FLAG)) {
+              methodGen.visitCode();
+
+              //just for the stub phase
+              //check for voids, primitives and objects...
+              if (Type.BOOLEAN_TYPE.equals(r)) {
+                methodGen.push(true);
+              } else if (Type.BYTE_TYPE.equals(r) || Type.INT_TYPE.equals(r) || Type.CHAR_TYPE.equals(r)
+                  || Type.SHORT_TYPE.equals(r)) {
+                methodGen.push(0);
+              } else if (Type.LONG_TYPE.equals(r)) {
+                methodGen.push(0l);
+              } else if (Type.DOUBLE_TYPE.equals(r)) {
+                methodGen.push(0d);
+              } else if (Type.FLOAT_TYPE.equals(r)) {
+                methodGen.push(0f);
+              } else {
+                methodGen.push((String) null);
+              }
+
+              methodGen.returnValue();
+              methodGen.endMethod();
+            }
+          }
+        }
+      }
+
       // end of class
       cv.visitEnd();
-      
+
       byte[] bytecode = cw.toByteArray();
       DynamicClassLoader loader = (DynamicClassLoader) LOADER.deref();
       return loader.defineClass(COMPILE_STUB_PREFIX + "." + ret.name, bytecode, frm);
@@ -7472,13 +7576,13 @@ public class HydraCompiler implements Opcodes {
     static String slashname(Class c) {
       return c.getName().replace('.', '/');
     }
-    
+
     static String slashname(String s) {
       return s.replace('.', '/');
     }
 
     protected void emitStatics(ClassVisitor cv) {
-      if (this.isDeftype()) {
+      if (this.isDeftype() && !this.isDefclass()) {
         // getBasis()
         Method meth = Method
             .getMethod("clojure.lang.IPersistentVector getBasis()");
@@ -7554,15 +7658,14 @@ public class HydraCompiler implements Opcodes {
         }
       }
     }
-    
-    //TODO merge with emitMethods?
+
     protected void emitCtors(ClassVisitor cv) {
       for (ISeq s = RT.seq(ctors); s != null; s = s.next()) {
         ObjMethod method = (ObjMethod) s.first();
         method.emit(this, cv);
       }
     }
-    
+
     protected void emitMethods(ClassVisitor cv) {
       for (ISeq s = RT.seq(methods); s != null; s = s.next()) {
         ObjMethod method = (ObjMethod) s.first();
@@ -7623,7 +7726,7 @@ public class HydraCompiler implements Opcodes {
           considerMethod(m, mm);
       }
     }
-    
+
     static void gatherDeclaredMethods(Class c, Map mm) {
       for (java.lang.reflect.Method m : c.getDeclaredMethods()) {
         IPersistentVector mk = msig(m);
@@ -7633,16 +7736,11 @@ public class HydraCompiler implements Opcodes {
       }
     }
 
-    static public Map[] gatherMethods(Class sc, ISeq interfaces, boolean includeDeclared) {
+    static public Map[] gatherMethods(Class sc, ISeq interfaces) {
       Map allm = new HashMap();
       gatherMethods(sc, allm);
       for (; interfaces != null; interfaces = interfaces.next()) {
         gatherMethods((Class) interfaces.first(), allm);
-      }
-      
-      //TODO remove?
-      if (includeDeclared) {
-        gatherDeclaredMethods(sc, allm);
       }
 
       Map<IPersistentVector, java.lang.reflect.Method> mm = new HashMap<IPersistentVector, java.lang.reflect.Method>();
@@ -7670,7 +7768,7 @@ public class HydraCompiler implements Opcodes {
       }
       return new Map[] { mm, covariants };
     }
-    
+
     static public boolean hasNoArgCtor(Class sc) {
       try {
         return sc.getDeclaredConstructor() != null;
@@ -7683,40 +7781,45 @@ public class HydraCompiler implements Opcodes {
   public static class NewCtor extends ObjMethod {
     Type[] ctorTypes;
     Type[] superCtorTypes;
+    Class[] superCtorClasses;
     Class[] exclasses;
     String superName;
     int accessModifiers;
     Expr[] superParamExprs;
-    
+    IPersistentMap[] fieldExprs;
+
     static Symbol dummyThis = Symbol.intern(null, "dummy_this_fzdlkdgpert");
     private IPersistentVector params;
     private IPersistentVector superparams;
-    
-    boolean autogenerate;
+
     boolean useThisAsSuperCtor;
-    
+
+    static Keyword bodyKey = Keyword.intern(null, "body");
+    static Keyword fieldKey = Keyword.intern(null, "field");
+    static String initset = "init-set!";
+
     public NewCtor(ObjExpr objx, ObjMethod parent) {
       super(objx, parent);
     }
-    
+
     int numParams() {
       return argLocals.count();
     }
-    
+
     String getMethodName() {
       throw new UnsupportedOperationException("Cannot return name for ctor");
     }
-    
+
     Type getReturnType() {
       throw new UnsupportedOperationException("Cannot return return type for ctor");
     }
-    
+
     Type[] getArgTypes() {
       return ctorTypes;
     }
-    
+
     public void emit(ObjExpr obj, ClassVisitor cv) {
-      
+
       Method m = new Method("<init>", Type.VOID_TYPE, ctorTypes);
       GeneratorAdapter gen = new GeneratorAdapter(accessModifiers, m, null, null, cv);
       addAnnotation(gen, methodMeta);
@@ -7724,11 +7827,11 @@ public class HydraCompiler implements Opcodes {
         IPersistentMap meta = RT.meta(params.nth(i));
         addParameterAnnotation(gen, meta, i);
       }
-            
-      Method superCtorMethod = superCtorTypes.length == 0 ? 
+
+      Method superCtorMethod = superCtorTypes.length == 0 ?
         Method.getMethod("void <init>()") :
         new Method("<init>", Type.VOID_TYPE, superCtorTypes);
-      
+
       Label start = gen.newLabel();
       Label end = gen.newLabel();
       gen.visitCode();
@@ -7736,105 +7839,83 @@ public class HydraCompiler implements Opcodes {
       gen.visitLineNumber(line, loopLabel);
       //gen.visitLabel(start);
       gen.loadThis();
-      
+
       //gen.visitCode();
       //Label loopLabel = gen.mark();
       //gen.visitLineNumber(line, loopLabel);
       try {
-        Var.pushThreadBindings(RT.map(LOOP_LABEL, loopLabel, METHOD, this));
-        
+        Var.pushThreadBindings(RT.map(LOOP_LABEL, loopLabel, METHOD, this, DEFINING_CLASS, objx.name));
+
         //no clearing when using in superctor
-        for (int i = 0;  i < argLocals.count(); i++) {
-          LocalBinding lb = (LocalBinding) argLocals.nth(i);
-          lb.canBeCleared = false;
-        }
-        
-        //allow for setting in ctor
+        setArgLocalsCanBeCleared(false);
+
+        //call exprs for superparams
         for (int i = 0; i < superParamExprs.length; i++) {
-          superParamExprs[i].emit(C.EVAL, objx, gen);
-          if (superCtorTypes[i] != OBJECT_TYPE) {
+          superParamExprs[i].emit(C.RETURN, objx, gen);
+          if (!superCtorClasses[i].isPrimitive() && superCtorTypes[i] != OBJECT_TYPE) {
             gen.checkCast(superCtorTypes[i]);
+          } else {
+            HostExpr.emitUnboxArg(obj, gen, superCtorClasses[i]);
           }
         }
-                
+
         gen.invokeConstructor(Type.getObjectType(superName), superCtorMethod);
 
-        for (int i = 0;  i < argLocals.count(); i++) {
-          LocalBinding lb = (LocalBinding) argLocals.nth(i);
-          lb.canBeCleared = true;
-        }
-        
-        for (ISeq s = RT.keys(obj.closes); s != null; s = s.next()) {
-          LocalBinding lb = (LocalBinding) s.first();
-          lb.skipMutableChecks = true;
-        }
-        
-        if (body != null) {
-          body.emit(C.EVAL, objx, gen);
-        }
-        
-        for (ISeq s = RT.keys(obj.closes); s != null; s = s.next()) {
-          LocalBinding lb = (LocalBinding) s.first();
-          lb.skipMutableChecks = false;
-        }
-        
-        //wrap fields when autogenerated
-        if (autogenerate) {
-          //int a = supportsMeta() ? 2 : 1;
-          int a = 1;
-          //do this only for matched fields (by name)
-          IPersistentMap fieldsMap = matchNamesWithFields(params.seq(), obj.closes);
-          for (ISeq ss = params.seq(); ss != null; ss = ss.next(), ++a) {
-            LocalBinding lb = (LocalBinding) RT.get(fieldsMap, ss.first());
-            //statics not supported, throw error to indicate this
-            if (lb.sym.meta() != null && lb.sym.meta().containsKey(ACCESS_STATIC_FLAG)) {
-              throw new IllegalArgumentException("Cannot autogenerate ctor setting static field");
-            } 
-            gen.loadThis();
+        //call exprs for setting
+        for (int  i = 0; i < fieldExprs.length; i++) {
+          IPersistentMap fieldExpr = fieldExprs[i];
+
+          Expr body = (Expr)RT.get(fieldExpr, bodyKey);
+          gen.loadThis();
+          if (body != null) {
+            body.emit(C.RETURN, objx, gen);
+          }
+
+          Symbol field = (Symbol)RT.get(fieldExpr, fieldKey);
+          if (field != null) {
+            LocalBinding lb = (LocalBinding)RT.get(obj.fields, field);
             Class primc = lb.getPrimitiveType();
             if (primc != null) {
-              gen.visitVarInsn(Type.getType(primc).getOpcode(Opcodes.ILOAD), a);
+              HostExpr.emitUnboxArg(obj, gen, primc);
               gen.putField(obj.objtype, lb.name, Type.getType(primc));
-              if (primc == Long.TYPE || primc == Double.TYPE)
-                ++a;
             } else {
-              Type t = Type.getType(lb.getJavaClass());
-              gen.visitVarInsn(t.getOpcode(Opcodes.ILOAD), a);
+              Type t = tagType(lb, obj.internalName, true);
+              if (t != OBJECT_TYPE) {
+                gen.checkCast(t);
+              }
               gen.putField(obj.objtype, lb.name, t);
             }
-            //closesExprs = closesExprs.cons(new LocalBindingExpr(lb, null));
           }
         }
-        
+        setArgLocalsCanBeCleared(true);
+
       } finally {
         Var.popThreadBindings();
       }
-      
+
       gen.visitLabel(end);
       gen.returnValue();
       gen.endMethod();
     }
-    
-    static NewCtor parse(ObjExpr objx, ISeq form, Symbol thistag, Class superClass) {      
 
+    static NewCtor parse(ObjExpr objx, ISeq form, Symbol thistag, Class superClass) {
       NewCtor ctor = new NewCtor(objx, (ObjMethod) METHOD.deref());
-      
+
       Symbol dotname = (Symbol) RT.first(form);
       Symbol name = (Symbol) Symbol.intern(null, munge(dotname.name)).withMeta(RT.meta(dotname));
       IPersistentVector params = (IPersistentVector) RT.second(form);
       
       ISeq body = RT.third(form) != null ? RT.next(form).next() : null;
       IPersistentVector superparams = PersistentVector.EMPTY;
-      boolean autogenerate = form.count() < 3;
       boolean useThisAsSuperCtor = false;
-     
+      
       if (body != null && body.first() != null && body.first() instanceof IPersistentList) {
         IPersistentList l = (IPersistentList) body.first();
         Object o = RT.first(l);
         if (o instanceof Symbol) {
           Symbol superctor = (Symbol)o;
           String supername = superctor.name;
-          if (supername.equals("super!") || supername.equals("this!")) {
+          if (superctor.equals(CTOR_SUPER) || superctor.equals(CTOR_THIS)) {
             useThisAsSuperCtor = supername.equals("this!");
             superparams = PersistentVector.create(RT.next(l));
             body = body.next();
@@ -7842,69 +7923,81 @@ public class HydraCompiler implements Opcodes {
         }
       }
       
-      ctor.accessModifiers = objx.isDefclass() ? getMethodModifiersCodesSum(dotname) : ACC_PUBLIC;
-      
+      ctor.accessModifiers = getCtorModifiersCodesSum(dotname);;
+
       if (params.count() == 0) {
         throw new IllegalArgumentException( "Must supply at least one argument for 'this' in: " + dotname);
       }
       Symbol thisName = (Symbol) params.nth(0);
       params = RT.subvec(params, 1, params.count());
-      
+
       //ctor types
-      Type[] ctorTypes = objx.ctorTypes(params.seq(), autogenerate);
-      if (autogenerate && ctorTypes.length != params.count()) {
-        throw new IllegalArgumentException("Cannot match names from ctor declaration with actual fields");
-      }
-      
+      Type[] ctorTypes = objx.ctorTypes(params.seq(), false);
+
       //superctor types
       IPersistentVector tv = PersistentVector.EMPTY;
       for (ISeq ss = superparams.seq(); ss != null; ss = ss.next()) {
         Object o = ss.first();
         IPersistentMap m = RT.meta(o);
         Class c = java.lang.Object.class;
-        if (m != null) {
-          Symbol hint = (Symbol)RT.get(m, Keyword.intern("tag"));
-          if (hint != null) {
+        Symbol hint = tagOf(o);
+        if (hint == null && o instanceof Symbol) {
+          for (int i = 0; i < params.length(); i++) {
+            if(RT.nth(params, i).equals(o)) {
+              hint = tagOf(RT.nth(params, i));
+            }
+          }
+        }
+        if (hint != null) {
+          if (tagEqualsInternalName(hint, objx.internalName)) {
+            //TODO ugly as hell
+            Type t = stubify(tagType(hint));
+            if (!isTypeArray(t)) {
+              c = HostExpr.tagToClass(stubify(tagType(hint)).getClassName());  
+            } else {
+              c = HostExpr.tagToClass(Symbol.intern(stubify(tagType(hint)).getDescriptor().replaceAll("/", "\\."))); 
+            }
+          } else {
             c = HostExpr.tagToClass(hint);
           }
-        } 
+        }
         tv = tv.cons(c);
       }
-      
+
       Type[] superCtorTypes = new Type[tv.count()];
-      Class[] superCtorClasses = new Class[tv.count()]; 
+      Class[] superCtorClasses = new Class[tv.count()];
       for (int i = 0; i < tv.count(); i++) {
         Class c = (Class) tv.nth(i);
-        superCtorTypes[i] = Type.getType(c);
+        superCtorTypes[i] = getType(c);
         superCtorClasses[i] = c;
       }
-      
+
       String superName = superClass.getName().replace('.', '/');
       if (useThisAsSuperCtor) {
         superClass = (Class)COMPILE_STUB_CLASS.get();
         superName = objx.internalName;
-      } 
-     
+      }
+
       try {
         superClass.getDeclaredConstructor(superCtorClasses);
       } catch (NoSuchMethodException e) {
-        throw new IllegalArgumentException("Cannot find super ctor for class: " + superClass.getName() + " and types " + tv); 
+        throw new IllegalArgumentException("Cannot find super ctor for class: " + superClass.getName() + " and types " + tv);
       } catch (Exception e) {
         //nothing
       }
-    
+
       try {
         ctor.line = lineDeref();
         ctor.column = columnDeref();
         PathNode pnode = new PathNode(PATHTYPE.PATH, (PathNode) CLEAR_PATH.get());
-        Var.pushThreadBindings(RT.mapUniqueKeys(METHOD, ctor, 
-                                                LOCAL_ENV, LOCAL_ENV.deref(), 
-                                                LOOP_LOCALS, null, 
+        Var.pushThreadBindings(RT.mapUniqueKeys(METHOD, ctor,
+                                                LOCAL_ENV, LOCAL_ENV.deref(),
+                                                LOOP_LOCALS, null,
                                                 NEXT_LOCAL_NUM, 0,
-                                                CLEAR_PATH, pnode, 
-                                                CLEAR_ROOT, pnode, 
-                                                CLEAR_SITES, PersistentHashMap.EMPTY));
-        
+                                                CLEAR_PATH, pnode,
+                                                CLEAR_ROOT, pnode,
+                                                CLEAR_SITES, PersistentHashMap.EMPTY,
+                                                DEFINING_CLASS, objx.name));
         if (thisName != null) {
           registerLocal((thisName == null) ? dummyThis : thisName, thistag, null, false);
         } else {
@@ -7913,66 +8006,129 @@ public class HydraCompiler implements Opcodes {
 
         PersistentVector argLocals = PersistentVector.EMPTY;
         Class[] pclasses = new Class[params.count()];
+        Type[] ptypes = new Type[params.count()];
         Symbol[] psyms = new Symbol[params.count()];
-        
+
         for (int i = 0; i < params.count(); i++) {
           //maybe move to compile stub or external validation
           if (!(params.nth(i) instanceof Symbol)) {
             throw new IllegalArgumentException("params must be Symbols");
           }
+
           Symbol p = (Symbol) params.nth(i);
-          Object tag = tagOf(p);
-          pclasses[i] = ctorTypes[i].getClass();
+          Symbol tag = tagOf(p);
+
+          if (tagEqualsInternalName(tag, objx.internalName)) {
+            Type tagType = tagType(tag);
+            ptypes[i] = tagType;
+            pclasses[i] = typeToClass(stubTagType(p, objx.internalName));
+          } else {
+            Class pclass = tagClass(tag);
+            pclasses[i] = pclass;
+          }
+
           psyms[i] = p;
         }
-        
+
         for (int i = 0; i < params.count(); i++) {
-          LocalBinding lb = registerLocal(psyms[i], null, new MethodParamExpr(pclasses[i]), true);
+          Symbol tag = ptypes[i] != null ? tagOf((Symbol)params.nth(i)) : null;
+          if (tag != null) {
+            tag = Symbol.intern(pclasses[i].getName());
+          }
+          LocalBinding lb = registerLocal(psyms[i], tag, new MethodParamExpr(pclasses[i]), true);
           argLocals = argLocals.assocN(i, lb);
         }
-        
+
         for (int i = 0; i < params.count(); i++) {
           if (pclasses[i] == long.class || pclasses[i] == double.class) {
             getAndIncLocalNum();
           }
         }
-        
+
         LOOP_LOCALS.set(argLocals);
-        
-        ctor.autogenerate = autogenerate;
+
         ctor.useThisAsSuperCtor = useThisAsSuperCtor;
         ctor.params = params;
         ctor.superparams = superparams;
         ctor.ctorTypes = ctorTypes;
         ctor.superCtorTypes = superCtorTypes;
+        ctor.superCtorClasses = superCtorClasses;
         ctor.superName = superName;
         ctor.methodMeta = RT.meta(name);
         ctor.argLocals = argLocals;
-        ctor.body = body == null ? null : (new BodyExpr.Parser()).parse(C.EVAL, body);
-        
+
+        IPersistentMap[] fieldExprs = new IPersistentMap[body != null ? body.count() : 0];
+        if (body != null) {
+          int i = 0;
+          Symbol field = null;
+          Object logic = null;
+          IPersistentMap counter = PersistentHashMap.EMPTY;
+          for (ISeq s = body; s != null; s = s.next(), i++) {
+            Object o = s.first();
+            if (o == null) {
+              continue;
+            }
+            if (!(o instanceof ISeq)) {
+              throw new IllegalArgumentException("Ctor definition element must be an ISeq, got: " + o);
+            }
+            ISeq tmp = (ISeq)o;
+            Symbol first = (Symbol)tmp.first();
+            if (first.name.equals(initset)) {
+              field = (Symbol)RT.second(tmp);
+              logic = tmp.next().next();
+              IMapEntry e = objx.fields.entryAt(field);
+              if (e == null) {
+                throw new IllegalArgumentException("Cannot find declared field " + field + " in " + objx.name);
+              } else if (objx.isStatic((Symbol)e.key())) {
+                throw new IllegalArgumentException("Cannot init-set! static field " + field + "; use set! instead");
+              }
+              Integer j = (Integer)RT.get(counter, field);
+              if (j == null) {
+                counter = counter.assoc(field, 1);
+              } else {
+                if (!objx.isMutable((LocalBinding)e.getValue()) && j > 0) {
+                  throw new UnsupportedOperationException("Cannot set non-mutable field " + field + " in " + objx.name
+                      + " more than once");
+                }
+                counter = counter.assoc(field, j+1);
+              }
+
+              fieldExprs[i] = PersistentHashMap.EMPTY
+                .assoc(bodyKey, (new BodyExpr.Parser()).parse(C.RETURN, logic))
+                .assoc(fieldKey, field);
+            } else {
+              logic = PersistentList.EMPTY.cons(tmp);
+              fieldExprs[i] = PersistentHashMap.EMPTY
+                .assoc(bodyKey, (new BodyExpr.Parser()).parse(C.RETURN, logic));
+            }
+          }
+        }
+
+        ctor.fieldExprs = fieldExprs;
+
         //superparam exprs
         Expr[] superParamExprs = new Expr[superparams.count()];
         for (int i = 0; i < superparams.count(); i++) {
           Object o = PersistentList.EMPTY.cons(superparams.nth(i)).seq();
-          superParamExprs[i] = (new BodyExpr.Parser()).parse(C.EVAL, o);
+          superParamExprs[i] = (new BodyExpr.Parser()).parse(C.RETURN, o);
         }
-        
+
         ctor.superParamExprs = superParamExprs;
         return ctor;
       } finally {
         Var.popThreadBindings();
       }
     }
-    
+
     IPersistentMap matchNamesWithFields(ISeq params, IPersistentMap closes) {
       IPersistentMap ret = PersistentArrayMap.EMPTY;
-      
+
       IPersistentMap m = PersistentHashMap.EMPTY;
       for (ISeq s = RT.keys(closes); s != null; s = s.next()) {
         LocalBinding lb = (LocalBinding) s.first();
         m = m.assoc(lb.name, lb);
       }
-      
+
       for (ISeq s = params; s != null; s = s.next()) {
         Symbol param = (Symbol) s.first();
         if (m.containsKey(param.name)) {
@@ -7983,7 +8139,7 @@ public class HydraCompiler implements Opcodes {
       return ret;
     }
   }
-  
+
   public static class NewInstanceMethod extends ObjMethod {
     String name;
     Type[] argTypes;
@@ -7991,7 +8147,7 @@ public class HydraCompiler implements Opcodes {
     Class retClass;
     Class[] exclasses;
     int accessModifiers;
-    
+
     static Symbol dummyThis = Symbol.intern(null, "dummy_this_dlskjsdfower");
     private IPersistentVector parms;
 
@@ -8014,7 +8170,7 @@ public class HydraCompiler implements Opcodes {
     Type[] getArgTypes() {
       return argTypes;
     }
-    
+
     int getAccessModifiers() {
       return accessModifiers;
     }
@@ -8023,8 +8179,7 @@ public class HydraCompiler implements Opcodes {
       return RT.vector(name, RT.seq(paramTypes));
     }
 
-    static NewInstanceMethod parse(ObjExpr objx, ISeq form, Symbol thistag,
-        Map overrideables) {
+    static NewInstanceMethod parse(ObjExpr objx, ISeq form, Symbol thistag, Map overrideables) {
       // (methodname [this-name args*] body...)
       // this-name might be nil
       NewInstanceMethod method = new NewInstanceMethod(objx, (ObjMethod) METHOD.deref());
@@ -8033,9 +8188,16 @@ public class HydraCompiler implements Opcodes {
       IPersistentVector params = (IPersistentVector) RT.second(form);
       boolean isMethodStatic = objx.isStatic(dotname);
       boolean isMethodAbstract = objx.isAbstract(dotname);
-      boolean isMethodDeclared = name.meta() != null && name.meta().containsKey(Keyword.intern("declares")) 
-          && objx.isDefclass();
-      
+
+      boolean isMethodDeclared = (Boolean)RT.contains(RT.meta(name), Keyword.intern("defm")) && objx.isDefclass();
+      boolean isMethodStaticBlock = (Boolean)RT.contains(RT.meta(name), Keyword.intern("static-init")) && objx.isDefclass();;
+      isMethodStatic = isMethodStaticBlock ? isMethodStaticBlock : isMethodStatic;
+      isMethodDeclared =  isMethodStaticBlock ? isMethodStaticBlock : isMethodDeclared;
+
+      if (isMethodDeclared && isMethodAbstract && ((objx.classAccess & Opcodes.ACC_ABSTRACT) == 0)) {
+        throw new IllegalArgumentException("Cannot declare abstract method in a non-abstract class");
+      }
+
       Symbol thisName = null;
       if (!(objx.isDefclass() && isMethodStatic)) {
         if (params.count() == 0) {
@@ -8044,19 +8206,18 @@ public class HydraCompiler implements Opcodes {
         thisName = (Symbol) params.nth(0);
         params = RT.subvec(params, 1, params.count());
       }
-      
+
       ISeq body = RT.next(RT.next(form));
       method.accessModifiers = objx.isDefclass() ? getMethodModifiersCodesSum(dotname) : ACC_PUBLIC;
       try {
         method.line = lineDeref();
         method.column = columnDeref();
         // register as the current method and set up a new env frame
-        PathNode pnode = new PathNode(PATHTYPE.PATH,
-            (PathNode) CLEAR_PATH.get());
+        PathNode pnode = new PathNode(PATHTYPE.PATH, (PathNode) CLEAR_PATH.get());
         Var.pushThreadBindings(RT.mapUniqueKeys(METHOD, method, LOCAL_ENV,
             LOCAL_ENV.deref(), LOOP_LOCALS, null, NEXT_LOCAL_NUM, 0,
             CLEAR_PATH, pnode, CLEAR_ROOT, pnode, CLEAR_SITES,
-            PersistentHashMap.EMPTY));
+            PersistentHashMap.EMPTY, DEFINING_CLASS, objx.isDefclass() ? objx.name : null));
 
         // register 'this' as local 0
         if (thisName != null) {
@@ -8067,7 +8228,7 @@ public class HydraCompiler implements Opcodes {
 
         PersistentVector argLocals = PersistentVector.EMPTY;
         Symbol sym = tagOf(name);
-        if (objx.isDefclass() && sym != null && internalNameFromType(sym.name).equals(objx.internalName)) {
+        if (objx.isDefclass() && tagEqualsInternalName(sym, objx.internalName)) {
           method.retType = tagType(sym);
         } else {
           method.retClass = tagClass(sym);
@@ -8075,27 +8236,28 @@ public class HydraCompiler implements Opcodes {
         method.argTypes = new Type[params.count()];
         boolean hinted = tagOf(name) != null;
         Class[] pclasses = new Class[params.count()];
-        Type[] ptypes = new Type[params.count()]; 
+        Type[] ptypes = new Type[params.count()];
         Symbol[] psyms = new Symbol[params.count()];
 
         for (int i = 0; i < params.count(); i++) {
           if (!(params.nth(i) instanceof Symbol))
             throw new IllegalArgumentException("params must be Symbols");
           Symbol p = (Symbol) params.nth(i);
-          Object tag = tagOf(p);
+          Symbol tag = tagOf(p);
           if (tag != null) {
             hinted = true;
           }
           if (p.getNamespace() != null) {
             p = Symbol.intern(p.name);
           }
-          Type tagType = tagType(tag);
-          if (tagType != null && internalNameFromType(tagType.getInternalName()).equals(objx.internalName)) {
-            pclasses[i] = Object.class;  
+
+          if (tagEqualsInternalName(tag, objx.internalName)) {
+            Type tagType = tagType(tag);
             ptypes[i] = tagType;
+            pclasses[i] = typeToClass(stubTagType(p, objx.internalName));
           } else {
             Class pclass = tagClass(tag);
-            pclasses[i] = pclass;  
+            pclasses[i] = pclass;
           }
           psyms[i] = p;
         }
@@ -8150,25 +8312,24 @@ public class HydraCompiler implements Opcodes {
           // validate unque name+arity among additional methods
           method.retType = Type.getType(method.retClass);
           method.exclasses = m.getExceptionTypes();
-        
+
         } else {
-          
+
           if (method.retClass != null) {
             method.retType = Type.getType(method.retClass);
           }
-          //TODO add support
+          //TODO add support for exceptions
           method.exclasses = new Class[0];
         }
 
         for (int i = 0; i < params.count(); i++) {
           Symbol tag = ptypes[i] != null ? tagOf((Symbol)params.nth(i)) : null;
+          if (tag != null) {
+            tag = Symbol.intern(pclasses[i].getName());
+          }
           LocalBinding lb = registerLocal(psyms[i], tag, new MethodParamExpr(pclasses[i]), true);
           argLocals = argLocals.assocN(i, lb);
-          if (tag != null) {
-            method.argTypes[i] = ptypes[i];
-          } else {
-            method.argTypes[i] = Type.getType(pclasses[i]);
-          }
+          method.argTypes[i] = getType(pclasses[i]);
         }
         for (int i = 0; i < params.count(); i++) {
           if (pclasses[i] == long.class || pclasses[i] == double.class)
@@ -8181,6 +8342,15 @@ public class HydraCompiler implements Opcodes {
         method.argLocals = argLocals;
         method.body = (new BodyExpr.Parser()).parse(C.RETURN, body);
         method.skipCode = isMethodAbstract;
+        method.isStaticInit = isMethodStaticBlock;
+
+        if (isMethodStaticBlock) {
+          method.accessModifiers = ACC_PUBLIC + ACC_STATIC;
+          method.name = "<clinit>";
+          method.retClass = void.class;
+          method.retType = Type.VOID_TYPE;
+        }
+
         return method;
       } finally {
         Var.popThreadBindings();
@@ -8219,7 +8389,7 @@ public class HydraCompiler implements Opcodes {
         for (int i = 0; i < exclasses.length; i++)
           extypes[i] = Type.getType(exclasses[i]);
       }
-      
+
       GeneratorAdapter gen = new GeneratorAdapter(getAccessModifiers(), m, null, extypes, cv);
       addAnnotation(gen, methodMeta);
       for (int i = 0; i < parms.count(); i++) {
@@ -8228,31 +8398,58 @@ public class HydraCompiler implements Opcodes {
       }
       if (!skipCode) {
         gen.visitCode();
-  
+
         Label loopLabel = gen.mark();
-  
+
         gen.visitLineNumber(line, loopLabel);
+
         try {
-          Var.pushThreadBindings(RT.map(LOOP_LABEL, loopLabel, METHOD, this));
-  
+          Var.pushThreadBindings(RT.map(LOOP_LABEL, loopLabel,
+              METHOD, this,
+              DEFINING_CLASS, obj.isDefclass() ? obj.name : null));
+
+          if (isStaticInit) {
+            if (obj.constants.count() > 0) {
+              obj.emitConstants(gen);
+            }
+            if (obj.keywordCallsites.count() > 0) {
+              obj.emitKeywordCallsites(gen);
+            }
+          }
+
+          if (isStaticInit) {
+            //for static field init expressions
+            Var.pushThreadBindings(RT.map(ALLOW_SETTING_FINALS, true));
+            for (ISeq s = RT.keys(obj.closes); s != null; s = s.next()) {
+              LocalBinding lb = (LocalBinding) s.first();
+              lb.skipMutableChecks = true;
+            }
+          }
+
           if (retClass != null) {
             emitBody(objx, gen, retClass, body);
           } else {
             emitBody(objx, gen, retType, body);
           }
-  
+
+          if (isStaticInit) {
+            Var.popThreadBindings();
+            for (ISeq s = RT.keys(obj.closes); s != null; s = s.next()) {
+              LocalBinding lb = (LocalBinding) s.first();
+              lb.skipMutableChecks = false;
+            }
+          }
+
           Label end = gen.mark();
-          gen.visitLocalVariable("this", obj.objtype.getDescriptor(), null,
-              loopLabel, end, 0);
+          gen.visitLocalVariable("this", obj.objtype.getDescriptor(), null, loopLabel, end, 0);
           for (ISeq lbs = argLocals.seq(); lbs != null; lbs = lbs.next()) {
             LocalBinding lb = (LocalBinding) lbs.first();
-            gen.visitLocalVariable(lb.name, argTypes[lb.idx - 1].getDescriptor(),
-                null, loopLabel, end, lb.idx);
+            gen.visitLocalVariable(lb.name, argTypes[lb.idx - 1].getDescriptor(), null, loopLabel, end, lb.idx);
           }
         } finally {
           Var.popThreadBindings();
         }
-  
+
         gen.returnValue();
         // gen.visitMaxs(1, 1);
       }
@@ -8295,23 +8492,6 @@ public class HydraCompiler implements Opcodes {
       c = HostExpr.tagToClass(tag);
     return c;
   }
-  
-  static Type tagType(Object tag) {
-    Type t = null;
-    if (tag instanceof Symbol) {
-      Symbol sym = (Symbol) tag;
-      if (sym.name.indexOf(".") >= 0) {
-        String name = sym.name.replace('.', '/');
-        boolean isArray = name.startsWith("[");
-        if (isArray) {
-          t = Type.getType(name);
-        } else {
-          t = Type.getType("L" + name + ";");
-        }
-      }
-    }
-    return t;
-  }
 
   static Class primClass(Class c) {
     return c.isPrimitive() ? c : Object.class;
@@ -8349,7 +8529,7 @@ public class HydraCompiler implements Opcodes {
     public MethodParamExpr(Class c) {
       this.c = c;
     }
-    
+
     public Object eval() {
       throw Util.runtimeException("Can't eval");
     }
@@ -8688,8 +8868,8 @@ public class HydraCompiler implements Opcodes {
   static IPersistentCollection emptyVarCallSites() {
     return PersistentHashSet.EMPTY;
   }
-  
-  //FIXME looks ugly, rewrite to something nicer and merge methods for class, field, method
+
+  //TODO looks ugly, rewrite to something nicer 
   static int getVisivilityModifiersCodesSum(IPersistentMap m) {
     int opcodes = 0;
     if (m != null) {
@@ -8701,71 +8881,90 @@ public class HydraCompiler implements Opcodes {
       } else  if (m.containsKey(ACCESS_PRIVATE_FLAG)) {
         opcodes += Opcodes.ACC_PRIVATE;
       }
-      
-      //nothing added, so make it public
-      if (opcodes == 0) {
-        opcodes += Opcodes.ACC_PUBLIC;
-      }
     }
+
+    if (opcodes == 0) {
+      opcodes += ACC_PUBLIC;
+    }
+
     return opcodes;
   }
-  
+
   static int getClassModifiersCodesSum(Symbol classname) {
     IPersistentMap m = classname.meta();
     int opcodes = 0;
     if (m != null) {
-      //check for visibility
-      opcodes = getVisivilityModifiersCodesSum(m);
+      opcodes += ACC_PUBLIC;
 
-      //check for other options
-      if (m.containsKey(ACCESS_ABSTRACT_FLAG) && !m.containsKey(ACCESS_NONFINAL_FLAG)) {
-        throw new IllegalArgumentException("Cannot create final abstract class!");
-      } else {
-        if (m.containsKey(ACCESS_ABSTRACT_FLAG)) {
-          opcodes += Opcodes.ACC_ABSTRACT;
-        }
-        if (!m.containsKey(ACCESS_NONFINAL_FLAG)) {
-          opcodes += Opcodes.ACC_FINAL;
-        }
+      if (m.containsKey(ACCESS_ABSTRACT_FLAG)) {
+        opcodes += Opcodes.ACC_ABSTRACT;
       }
+      if (!m.containsKey(ACCESS_NONFINAL_FLAG)) {
+        opcodes += Opcodes.ACC_FINAL;
+      }
+
+      if ((Opcodes.ACC_ABSTRACT & opcodes) > 0 && (Opcodes.ACC_FINAL & opcodes) > 0) {
+        throw new IllegalArgumentException("Cannot create final abstract class!");
+      }
+
       opcodes += ACC_SUPER;
     } else {
-      //defaults 
+      //defaults
       opcodes = ACC_PUBLIC + ACC_SUPER + ACC_FINAL;
     }
     return opcodes;
   }
-  
+
   static int getFieldModifiersCodesSum(Symbol field) {
     IPersistentMap m = field.meta();
     int opcodes = 0;
     if (m != null) {
-      // check for visibility 
-      opcodes = getVisivilityModifiersCodesSum(m);
-      
+      // check for visibility
+      opcodes = getVisivilityModifiersCodesSum(m); //removed for now, only public methods can be declared
+
       //other field checks
       if (m.containsKey(ACCESS_VOLATILE_MUTABLE)) {
         opcodes += Opcodes.ACC_VOLATILE;
       } else if (!m.containsKey(ACCESS_UNSYNC_MUTABLE)) {
         opcodes += Opcodes.ACC_FINAL;
       }
+
+      if (m.containsKey(ACCESS_TRANSIENT_FLAG)) {
+        opcodes += Opcodes.ACC_TRANSIENT;
+      }
+
       if (m.containsKey(ACCESS_STATIC_FLAG)) {
         opcodes += Opcodes.ACC_STATIC;
       }
-      
+
     } else {
       opcodes = ACC_PUBLIC + ACC_FINAL;
     }
     return opcodes;
   }
-  
+
+  static int getCtorModifiersCodesSum(Symbol method) {
+    IPersistentMap m = method.meta();
+    int opcodes = 0;
+    if (m != null) {
+      opcodes = getVisivilityModifiersCodesSum(m);
+
+      if (m.containsKey(ACCESS_VARARGS_FLAG)) {
+        opcodes += Opcodes.ACC_VARARGS;
+      }
+    } else {
+      opcodes = ACC_PUBLIC;
+    }
+    return opcodes;
+  }
+
   static int getMethodModifiersCodesSum(Symbol method) {
     IPersistentMap m = method.meta();
     int opcodes = 0;
     if (m != null) {
-      // check for visibility 
-      opcodes = getVisivilityModifiersCodesSum(m);
-      
+      // check for visibility
+      opcodes = getVisivilityModifiersCodesSum(m); //removed for now, only public methods can be declared
+
       if (m.containsKey(ACCESS_ABSTRACT_FLAG)) {
         opcodes += Opcodes.ACC_ABSTRACT;
       }
@@ -8775,38 +8974,119 @@ public class HydraCompiler implements Opcodes {
       if (m.containsKey(ACCESS_STATIC_FLAG)) {
         opcodes += Opcodes.ACC_STATIC;
       }
-      
-      // not yet
-      //if (m.containsKey(ACCESS_NATIVE_FLAG)) {
-      //  opcodes += Opcodes.ACC_NATIVE;
-      //}
+
+      if (m.containsKey(ACCESS_SYNCHRONIZED_FLAG)) {
+        opcodes += Opcodes.ACC_SYNCHRONIZED;
+      }
+
+      if (m.containsKey(ACCESS_VARARGS_FLAG)) {
+        opcodes += Opcodes.ACC_VARARGS;
+      }
+
+      if ((Opcodes.ACC_ABSTRACT & opcodes) > 0 && (Opcodes.ACC_STATIC & opcodes) > 0) {
+        throw new IllegalArgumentException("Cannot create abstract static method!");
+      }
+
+      if ((Opcodes.ACC_ABSTRACT & opcodes) > 0 && (Opcodes.ACC_FINAL & opcodes) > 0) {
+        throw new IllegalArgumentException("Cannot create abstract final method!");
+      }
+
+      if ((Opcodes.ACC_ABSTRACT & opcodes) > 0 && (Opcodes.ACC_PRIVATE & opcodes) > 0) {
+        throw new IllegalArgumentException("Cannot create abstract private method!");
+      }
+
     } else {
       opcodes = ACC_PUBLIC;
     }
     return opcodes;
   }
-  
-  static String internalNameFromType(String type) {
+
+  static String removeArrayFromTypeName(String type) {
     String s = type;
-    if (type.startsWith("[")) {
-      s = type.replaceAll("\\[", "").substring(1).replace(";", "");
-    } 
-    return s.replace('.','/');
+    if (s != null) {
+      if (s.startsWith("[")) {
+        s = type.replaceAll("\\[", "").substring(1).replace(";", "");
+      }
+      s = s.replace('.','/');
+    }
+    return s;
   }
 
-  static String dotname(String slashname) {
-    return slashname.replace('/', '.');
+  static boolean tagEqualsInternalName(Symbol tag, String internalName) {
+    if (tag == null) return false;
+    return tagEqualsInternalName(tag.name, internalName);
   }
-  
-  static Type getTagType(String internalName, boolean isDefclass, LocalBinding lb) {
-    Type t= OBJECT_TYPE;
-    if (isDefclass) {
-      if (lb.tagMatchesClass(dotname(internalName))) {
-        t =  tagType(lb.tag);
-      } else {
-        t = lb.getJavaClass() != null ? Type.getType(lb.getJavaClass()) : t;
+
+  static boolean tagEqualsInternalName(String tag, String internalName) {
+    if (tag == null) return false;
+    return removeArrayFromTypeName(tag).equals(internalName);
+  }
+
+  static Type classNameToType(String classname) {
+    Type t = null;
+    if (classname.indexOf(".") >= 0) {
+      String desc = classname.replace('.', '/');
+      if (!desc.startsWith("[")) {
+        desc = "L" + desc + ";";
       }
+      t = Type.getType(desc);
     }
     return t;
   }
+
+  static Type tagType(Symbol tag) {
+    Type t = tag != null ? classNameToType(tag.name) : null;
+    if (t == null) {
+      t = OBJECT_TYPE;
+    }
+    return t;
+  }
+
+  static Type tagType(LocalBinding lb, String internalName, boolean resolveType) {
+    Type ret = OBJECT_TYPE;
+    if (resolveType) {
+      if (tagEqualsInternalName(lb.tag, internalName)) {
+        Type t = tagType(lb.tag);
+        ret = t;
+      } else {
+        ret = lb.getJavaClass() != null ? Type.getType(lb.getJavaClass()) : ret;
+      }
+    }
+    return ret;
+  }
+
+  static Type stubTagType(Symbol sym, String internalName) {
+    Type r = null;
+    Symbol tag = tagOf(sym);
+    if (tagEqualsInternalName(tag, internalName)) {
+      r = stubify(tagType(tag));
+    } else {
+      r = Type.getType(tagClass(tag));
+    }
+    return r;
+  }
+
+  private static Type stubify(Type t) {
+    String desc = "";
+    String name = t.getInternalName();
+    if (isTypeArray(t)) {
+      desc += t.getInternalName().substring(0, t.getDimensions());
+      name = t.getInternalName().substring(t.getDimensions()+1, t.getInternalName().length()-1);
+    }
+    desc += "L" + COMPILE_STUB_PREFIX + "/" + name + ";";
+    return Type.getType(desc);
+  }
+  
+  private static Class typeToClass(Type t) {
+    if (isTypeArray(t)) {
+      return RT.classForName(t.getInternalName().replaceAll("/", "\\."));
+    } else {
+      return RT.classForName(t.getClassName());
+    }
+  }
+  
+  private static boolean isTypeArray(Type t) {
+    return t.getInternalName().startsWith("[");
+  }
+
 }

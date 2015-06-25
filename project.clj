@@ -1,8 +1,8 @@
-(defproject hydra "0.1.0"
-  :description "Slightly modified Clojure compiler"
+(defproject iconoclast "0.2.3"
+  :description "Yet another java interop"
   :license {:name "Eclipse Public License"
             :url "http://www.eclipse.org/legal/epl-v10.html"}
-  :dependencies      [[org.clojure/clojure "1.6.0"]]
+  :dependencies      [[org.clojure/clojure "1.7.0"]]
   :source-paths      ["src/clojure"]
   :java-source-paths ["src/java"]
-  :profiles {:test {:aot [hydra.test.examples]}})
+  :profiles {:test {:aot [iconoclast.test.utils.examples]}})
