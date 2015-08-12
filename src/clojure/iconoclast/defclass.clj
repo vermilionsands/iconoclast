@@ -59,7 +59,7 @@
            args (map
                   (fn [x] (with-meta x (assoc (meta x) :tag (get name->type x))))
                   args)
-           body (map (fn [x] `(init-set! ~(with-meta x nil) ~(with-meta x nil))) args)]
+           body (map (fn [x] `(~(symbol "init-set!") ~(with-meta x nil) ~(with-meta x nil))) args)]
       (cons name (cons (vec (cons this args)) body)))))
 
 (defn- merge-init-with-ctors [name classname fields methods]

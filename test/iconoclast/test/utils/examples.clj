@@ -48,7 +48,7 @@
   ;should be added to each constructor
   (^:instance-init SampleClass [this] (init-set! defaultField "default"))
   ;static init block
-  (^:static-init ^:static SampleClass [] (set! defaultStaticField "default"))
+  (^:static-init ^:static SampleClass [] (init-set! defaultStaticField "default"))
 
   (^:init SampleClass [this]) ;empty ctor
   (^:init SampleClass [this a b c d]) ;should generate ctor accepting Object, int, String, SampleClass and setting a, b, c, d

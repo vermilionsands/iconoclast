@@ -68,7 +68,8 @@ public class IconoclastCompiler implements Opcodes {
   static final Symbol INVOKE_STATIC = Symbol.intern("invokeStatic");
   static final Symbol CTOR_THIS = Symbol.intern("this!");
   static final Symbol CTOR_SUPER = Symbol.intern("super!");
-  
+  static final Symbol INITIAL_ASSIGN = Symbol.intern("init-set!");
+
   static final Keyword inlineKey = Keyword.intern(null, "inline");
   static final Keyword inlineAritiesKey = Keyword.intern(null, "inline-arities");
   static final Keyword staticKey = Keyword.intern(null, "static");
@@ -111,6 +112,7 @@ public class IconoclastCompiler implements Opcodes {
       IMPORT, new ImportExpr.Parser(),
       DOT, new HostExpr.Parser(),
       ASSIGN, new AssignExpr.Parser(),
+      INITIAL_ASSIGN, new InitialAssignExpr.Parser(),
       DEFTYPE, new NewInstanceExpr.DeftypeParser(),
       DEFCLASS, new NewInstanceExpr.DefclassParser(),
       REIFY, new NewInstanceExpr.ReifyParser(),
@@ -241,7 +243,6 @@ public class IconoclastCompiler implements Opcodes {
     return RT.get(COMPILER_OPTIONS.deref(), k);
   }
 
-  static Var ALLOW_SETTING_FINALS = Var.create(false).setDynamic();
   static Var DEFINING_CLASS = Var.create(null).setDynamic();
 
   @SuppressWarnings("unchecked")
@@ -290,6 +291,8 @@ public class IconoclastCompiler implements Opcodes {
 
   // LocalBinding -> Set<LocalBindingExpr>
   static final public Var CLEAR_SITES = Var.create(null).setDynamic();
+  
+  static final public Var FIELD_ASSIGNMENTS = Var.create(null).setDynamic();
 
   public enum C {
     STATEMENT, // value ignored
@@ -536,6 +539,101 @@ public class IconoclastCompiler implements Opcodes {
     }
   }
 
+  public static class InitialAssignExpr implements Expr {
+
+    private final Symbol target;
+    private final Expr val;
+
+    public InitialAssignExpr(Symbol target, Expr val) {
+      this.target = target;
+      this.val = val;
+    }
+
+    static class Parser implements IParser {
+      public Expr parse(C context, Object frm) {
+        Object m = METHOD.deref();
+        if(m != null && m instanceof NewCtor
+            || (m instanceof NewInstanceMethod && ((NewInstanceMethod)m).isStaticInit)) {
+          ISeq tmp = (ISeq)frm;
+          Symbol field = (Symbol)RT.second(tmp);
+          return new InitialAssignExpr(field, analyze(C.EXPRESSION, RT.third(frm)));
+        } else {
+          throw new UnsupportedOperationException("Cannot use " + frm + " in this context " + METHOD.deref());
+        }
+      }
+    }
+
+    @Override
+    public Object eval() {
+      return null;
+    }
+
+    @Override
+    public void emit(C context, ObjExpr objx, GeneratorAdapter gen) {
+      IMapEntry e = objx.fields.entryAt(target);
+      if (e == null) {
+        throw new IllegalArgumentException("Cannot find declared field " + target + " in " + objx.name);
+      } 
+      
+      if (!getAndSetFieldAssignment(target)) {
+        
+        boolean isStatic = objx.isStatic((Symbol)e.key());
+        if (!isStatic) {
+          gen.loadThis();
+        }
+        val.emit(C.RETURN, objx, gen);
+
+        LocalBinding lb = (LocalBinding)RT.get(objx.fields, target);
+        Class primc = lb.getPrimitiveType();
+        if (primc != null) {
+          HostExpr.emitUnboxArg(objx, gen, primc);
+          if (!isStatic) {
+            gen.putField(objx.objtype, lb.name, Type.getType(primc));
+          } else {
+            gen.putStatic(objx.objtype, lb.name, Type.getType(primc));
+            gen.getStatic(objx.objtype, lb.name, Type.getType(primc));
+          }
+        } else {
+          Type t = tagType(lb, objx.internalName, true);
+          if (t != OBJECT_TYPE) {
+            gen.checkCast(t);
+          }
+          if (!isStatic) {
+            gen.putField(objx.objtype, lb.name, t);
+          } else {
+            gen.putStatic(objx.objtype, lb.name, t);
+            gen.getStatic(objx.objtype, lb.name, t);
+          }
+        }
+      } else {
+      	throw new UnsupportedOperationException("Cannot set non-mutable field " + target + " in " + objx.name + " more than once");
+      }
+      
+    }
+    
+    private boolean getAndSetFieldAssignment(Symbol field) {
+      IPersistentMap m = (IPersistentMap)FIELD_ASSIGNMENTS.deref();
+      Object o = RT.get(m, field);
+      if (o == null) {
+        m = m.assoc(field, Boolean.TRUE);
+        FIELD_ASSIGNMENTS.set(m);
+        return false;
+      } else {
+        return true;
+      }
+    }
+
+    @Override
+    public boolean hasJavaClass() {
+      return false;
+    }
+
+    @Override
+    public Class getJavaClass() { 
+      return null;
+    }
+  }
+  
   public static class AssignExpr implements Expr {
     public final AssignableExpr target;
     public final Expr val;
@@ -1280,8 +1378,7 @@ public class IconoclastCompiler implements Opcodes {
     }
 
     public void emitAssign(C context, ObjExpr objx, GeneratorAdapter gen, Expr val) {
-      if (Modifier.isFinal(field.getModifiers()) && !((Boolean)ALLOW_SETTING_FINALS.deref()
-          && getType(c).getClassName().equals(DEFINING_CLASS.deref()))) {
+      if (Modifier.isFinal(field.getModifiers())) {
         throw new UnsupportedOperationException("Cannot assign to non-mutable " + fieldName
             + " in " + getType(c).getClassName());
       }
@@ -4666,11 +4763,10 @@ public class IconoclastCompiler implements Opcodes {
     }
 
     public void emitAssignLocal(GeneratorAdapter gen, LocalBinding lb, Expr val) {
-      if (!isMutable(lb) && !lb.skipMutableChecks) {
+      if (!isMutable(lb)) {
         throw new IllegalArgumentException("Cannot assign to non-mutable: " + lb.name);
       }
 
-      lb.skipMutableChecks = false;
       Class primc = lb.getPrimitiveType();
       boolean isLbStatic = isStatic(lb.sym);
       //can load only when not static
@@ -5452,8 +5548,6 @@ public class IconoclastCompiler implements Opcodes {
     public boolean canBeCleared = !RT
         .booleanCast(getCompilerOption(disableLocalsClearingKey));
     public boolean recurMistmatch = false;
-
-    public boolean skipMutableChecks = false;
 
     public LocalBinding(int num, Symbol sym, Symbol tag, Expr init,
         boolean isArg, PathNode clearPathRoot) {
@@ -7388,7 +7482,6 @@ public class IconoclastCompiler implements Opcodes {
             } else {
               desc = lb.getJavaClass() != null ? Type.getDescriptor(lb.getJavaClass()) : desc;
             }
-
           }
           cv.visitField(access, lb.name, desc, null, null);
         }
@@ -7786,7 +7879,6 @@ public class IconoclastCompiler implements Opcodes {
     String superName;
     int accessModifiers;
     Expr[] superParamExprs;
-    IPersistentMap[] fieldExprs;
 
     static Symbol dummyThis = Symbol.intern(null, "dummy_this_fzdlkdgpert");
     private IPersistentVector params;
@@ -7796,7 +7888,6 @@ public class IconoclastCompiler implements Opcodes {
 
     static Keyword bodyKey = Keyword.intern(null, "body");
     static Keyword fieldKey = Keyword.intern(null, "field");
-    static String initset = "init-set!";
 
     public NewCtor(ObjExpr objx, ObjMethod parent) {
       super(objx, parent);
@@ -7844,7 +7935,7 @@ public class IconoclastCompiler implements Opcodes {
       //Label loopLabel = gen.mark();
       //gen.visitLineNumber(line, loopLabel);
       try {
-        Var.pushThreadBindings(RT.map(LOOP_LABEL, loopLabel, METHOD, this, DEFINING_CLASS, objx.name));
+        Var.pushThreadBindings(RT.map(LOOP_LABEL, loopLabel, METHOD, this, DEFINING_CLASS, objx.name, FIELD_ASSIGNMENTS, PersistentHashMap.EMPTY));
 
         //no clearing when using in superctor
         setArgLocalsCanBeCleared(false);
@@ -7858,36 +7949,12 @@ public class IconoclastCompiler implements Opcodes {
             HostExpr.emitUnboxArg(obj, gen, superCtorClasses[i]);
           }
         }
-
         gen.invokeConstructor(Type.getObjectType(superName), superCtorMethod);
-
-        //call exprs for setting
-        for (int  i = 0; i < fieldExprs.length; i++) {
-          IPersistentMap fieldExpr = fieldExprs[i];
-
-          Expr body = (Expr)RT.get(fieldExpr, bodyKey);
-          gen.loadThis();
-          if (body != null) {
-            body.emit(C.RETURN, objx, gen);
-          }
-
-          Symbol field = (Symbol)RT.get(fieldExpr, fieldKey);
-          if (field != null) {
-            LocalBinding lb = (LocalBinding)RT.get(obj.fields, field);
-            Class primc = lb.getPrimitiveType();
-            if (primc != null) {
-              HostExpr.emitUnboxArg(obj, gen, primc);
-              gen.putField(obj.objtype, lb.name, Type.getType(primc));
-            } else {
-              Type t = tagType(lb, obj.internalName, true);
-              if (t != OBJECT_TYPE) {
-                gen.checkCast(t);
-              }
-              gen.putField(obj.objtype, lb.name, t);
-            }
-          }
-        }
         setArgLocalsCanBeCleared(true);
+        
+        if (body != null) {
+          body.emit(C.RETURN, objx, gen);
+        }
 
       } finally {
         Var.popThreadBindings();
@@ -8056,56 +8123,8 @@ public class IconoclastCompiler implements Opcodes {
         ctor.superName = superName;
         ctor.methodMeta = RT.meta(name);
         ctor.argLocals = argLocals;
-
-        IPersistentMap[] fieldExprs = new IPersistentMap[body != null ? body.count() : 0];
-        if (body != null) {
-          int i = 0;
-          Symbol field = null;
-          Object logic = null;
-          IPersistentMap counter = PersistentHashMap.EMPTY;
-          for (ISeq s = body; s != null; s = s.next(), i++) {
-            Object o = s.first();
-            if (o == null) {
-              continue;
-            }
-            if (!(o instanceof ISeq)) {
-              throw new IllegalArgumentException("Ctor definition element must be an ISeq, got: " + o);
-            }
-            ISeq tmp = (ISeq)o;
-            Symbol first = (Symbol)tmp.first();
-            if (first.name.equals(initset)) {
-              field = (Symbol)RT.second(tmp);
-              logic = tmp.next().next();
-              IMapEntry e = objx.fields.entryAt(field);
-              if (e == null) {
-                throw new IllegalArgumentException("Cannot find declared field " + field + " in " + objx.name);
-              } else if (objx.isStatic((Symbol)e.key())) {
-                throw new IllegalArgumentException("Cannot init-set! static field " + field + "; use set! instead");
-              }
-              Integer j = (Integer)RT.get(counter, field);
-              if (j == null) {
-                counter = counter.assoc(field, 1);
-              } else {
-                if (!objx.isMutable((LocalBinding)e.getValue()) && j > 0) {
-                  throw new UnsupportedOperationException("Cannot set non-mutable field " + field + " in " + objx.name
-                      + " more than once");
-                }
-                counter = counter.assoc(field, j+1);
-              }
-
-              fieldExprs[i] = PersistentHashMap.EMPTY
-                .assoc(bodyKey, (new BodyExpr.Parser()).parse(C.RETURN, logic))
-                .assoc(fieldKey, field);
-            } else {
-              logic = PersistentList.EMPTY.cons(tmp);
-              fieldExprs[i] = PersistentHashMap.EMPTY
-                .assoc(bodyKey, (new BodyExpr.Parser()).parse(C.RETURN, logic));
-            }
-          }
-        }
-
-        ctor.fieldExprs = fieldExprs;
-
+        ctor.body = (new BodyExpr.Parser()).parse(C.RETURN, body);
+        
         //superparam exprs
         Expr[] superParamExprs = new Expr[superparams.count()];
         for (int i = 0; i < superparams.count(); i++) {
@@ -8209,6 +8228,7 @@ public class IconoclastCompiler implements Opcodes {
 
       ISeq body = RT.next(RT.next(form));
       method.accessModifiers = objx.isDefclass() ? getMethodModifiersCodesSum(dotname) : ACC_PUBLIC;
+      method.isStaticInit = isMethodStaticBlock;
       try {
         method.line = lineDeref();
         method.column = columnDeref();
@@ -8342,7 +8362,6 @@ public class IconoclastCompiler implements Opcodes {
         method.argLocals = argLocals;
         method.body = (new BodyExpr.Parser()).parse(C.RETURN, body);
         method.skipCode = isMethodAbstract;
-        method.isStaticInit = isMethodStaticBlock;
 
         if (isMethodStaticBlock) {
           method.accessModifiers = ACC_PUBLIC + ACC_STATIC;
@@ -8406,7 +8425,8 @@ public class IconoclastCompiler implements Opcodes {
         try {
           Var.pushThreadBindings(RT.map(LOOP_LABEL, loopLabel,
               METHOD, this,
-              DEFINING_CLASS, obj.isDefclass() ? obj.name : null));
+              DEFINING_CLASS, obj.isDefclass() ? obj.name : null,
+              FIELD_ASSIGNMENTS, PersistentHashMap.EMPTY));
 
           if (isStaticInit) {
             if (obj.constants.count() > 0) {
@@ -8417,27 +8437,10 @@ public class IconoclastCompiler implements Opcodes {
             }
           }
 
-          if (isStaticInit) {
-            //for static field init expressions
-            Var.pushThreadBindings(RT.map(ALLOW_SETTING_FINALS, true));
-            for (ISeq s = RT.keys(obj.closes); s != null; s = s.next()) {
-              LocalBinding lb = (LocalBinding) s.first();
-              lb.skipMutableChecks = true;
-            }
-          }
-
           if (retClass != null) {
             emitBody(objx, gen, retClass, body);
           } else {
             emitBody(objx, gen, retType, body);
-          }
-
-          if (isStaticInit) {
-            Var.popThreadBindings();
-            for (ISeq s = RT.keys(obj.closes); s != null; s = s.next()) {
-              LocalBinding lb = (LocalBinding) s.first();
-              lb.skipMutableChecks = false;
-            }
           }
 
           Label end = gen.mark();
