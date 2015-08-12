@@ -565,7 +565,7 @@ public class IconoclastCompiler implements Opcodes {
 
     @Override
     public Object eval() {
-      return null;
+      throw new UnsupportedOperationException("Can't eval init-set!");
     }
 
     @Override
