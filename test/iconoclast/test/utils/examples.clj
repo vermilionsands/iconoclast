@@ -1,8 +1,11 @@
 (ns iconoclast.test.utils.examples
   (:require [iconoclast.defclass :refer :all]
-            [iconoclast.definterface :as interface]
-            [iconoclast.other.utils :as u])
+            [iconoclast.reflect :refer :all]
+            [iconoclast.definterface :as interface])
   (:import [java.util List]))
+
+(defn foo [] "foo")
+(defn bar [x y] (str "bar " x " " y))
 
 (interface/definterface SampleInterface
   (objectMethod [x])
@@ -26,7 +29,7 @@
   (^:defm concreteMethod [this]))
 
 ;final class
-(defclass SampleClass [a                                                         ;Object, final, public field
+(defclass ^:load-ns SampleClass [a                                                         ;Object, final, public field
                        ^:mutable aMutable                                        ;Object, unsynchronized-mutable
                        ^:mutable ^:array aArr                                    ;Object array
                        ^:mutable ^:static aStatic                                ;static field
@@ -138,7 +141,14 @@
 
   ;calls to private and protected methods using reflection should fail at runtime
   (^:defm failingPrivateCall [this other x] (.samplePrivateMethod other x))
-  (^:defm failingProtectedCall [this other x] (.sampleProtectedMethod other x)))
+  (^:defm failingProtectedCall [this other x] (.sampleProtectedMethod other x))
+
+  (^:defm callFoo [this] (foo))
+  (^:defm callBar [this x y] (bar x y))
+  (^:defm ^:static staticCallFoo [] (foo))
+  (^:defm ^:static staticCallBar [x y] (bar x y))
+  (^:defm ^:static callCallFoo [^SampleClass x] (.callFoo x))
+  (^:defm ^:static callCallBar [^SampleClass x y z] (.callBar x y z)))
 
 (defclass NonPublicFieldsClass [^:protected aProtected
                                 ;private mutable field with automatically generated setter and getter
@@ -195,7 +205,10 @@
   (^:defm setOtherAPrivate [this ^NonPublicFieldsClass other x] (set! (.aPrivate other) x))
   (^:defm setOtherCPrivate [this ^NonPublicFieldsClass other x] (set! (.cPrivate other) x))
   (^:defm setOtherBPrivate [this ^NonPublicFieldsClass other x] (set! (.bPrivate other) x))
-  (^:defm setOtherDPrivate [this ^NonPublicFieldsClass other x] (set! (.dPrivate other) x)))
+  (^:defm setOtherDPrivate [this ^NonPublicFieldsClass other x] (set! (.dPrivate other) x))
+
+  (^:defm ^:static callSampleClass [^SampleClass x] (.callFoo x))
+  (^:defm ^:static callSampleClass [] (.callFoo (SampleClass.))))
 
 (defclass DefaultCtorClass [^:get ^:private a
                             ^:get ^:private ^int b

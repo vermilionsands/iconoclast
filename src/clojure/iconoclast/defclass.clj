@@ -6,9 +6,10 @@
   (IconoclastCompiler/eval form))
 
 (defn- emit-defclass* [tagname name fields interfaces methods]
-  (let [classname (with-meta (symbol (str (namespace-munge *ns*) "." name)) (meta name))]
+  (let [nsname (str (namespace-munge *ns*))
+        classname (with-meta (symbol (str nsname "." name)) (meta name))]
      (custom-eval
-       `(~(symbol "defclass*") ~tagname ~classname ~fields
+       `(~(symbol "defclass*") ~tagname ~classname ~nsname ~fields
           :implements ~interfaces
           ~@methods))))
 
@@ -63,7 +64,7 @@
       (cons name (cons (vec (cons this args)) body)))))
 
 (defn- merge-init-with-ctors [name classname fields methods]
-  (let [[ctors init methods] (reduce (fn [acc x]
+  (let [[ctors inits methods] (reduce (fn [acc x]
                                        (let [m (meta (first x))
                                              k (cond
                                                  (:init m) 0
@@ -71,87 +72,25 @@
                                                  :else 2)]
                                          (update-in acc [k] #(cons x %))))
                                [[] [] []] methods)
-        ctors (map (partial expand-ctor name classname fields) ctors)]
-        (if (empty? init)
-          (reduce #(cons %2 %1) methods ctors)
-          (let [init-this (-> init first second first)
-                init-logic (drop 2 (first init))
-                blank-ctor (list (with-meta name {:init true}) [init-this] nil)
-                ctors (map (fn [x]
-                              (let [[_ [ctor-this & args] super & body] x
-                                    idx (if (some #(= (first super) %) ['super! 'this!]) 3 2)
-                                    [head tail] (split-at idx x)]
-                                (when (not= ctor-this init-this)
-                                  (throw (AssertionError. (str "'this' name in ctor and instance init section have to "
-                                    "be equal. Got: " init-this " and " ctor-this))))
-                                (apply concat [head init-logic tail])))
-                        (if-not (empty? ctors) ctors (cons blank-ctor ctors)))]
-            (reduce #(cons %2 %1) methods ctors)))))
-
-(defmacro get-class-from-instance [use-parent? instance]
-  `[(class ~instance)
-    ~(if use-parent? `(first (bases (class ~instance)))
-                     `(class ~instance))])
-
-(defmacro p-invoke [instance m & args]
-  `(invoke-method true ~instance ~m ~@args))
-
-(defmacro s-invoke' [instance m & args]
-  `(invoke-method false ~instance ~m ~@args))
-
-(defmacro p-invoke [instance m & args]
-  (let [tags (vec (map #(:tag (:meta %)) args))]
-    `(let [clazz# (class ~instance)
-           arg-types# (when (not-empty ~tags) (into-array Class (vec (map resolve-tag ~tags))))
-           method# (try (.getDeclaredMethod ^Class clazz# ~(str m) arg-types#)
-                        (catch java.lang.NoSuchMethodException e#
-                          (throw (IllegalArgumentException.
-                                   (str "Cannot find method " ~(str m) " for class " clazz#
-                                     " with signature " (vec arg-types#) ". Consider using typehints")))))
-           return-type# (.getReturnType ^java.lang.reflect.Method method#)]
-        (if (empty? arg-types#)
-            (.invoke ^java.lang.reflect.Method method# ~instance)
-            (.invoke ^java.lang.reflect.Method method# ~instance (into-array Object (list ~@args)))))))
-
-(defmacro s-invoke [instance m & args]
-  (let [tags (vec (map #(:tag (:meta %)) args))]
-    `(let [[clazz# parent#] (get-class-from-instance true ~instance)
-           arg-types# (when (not-empty ~tags) (into-array Class (vec (map resolve-tag ~tags))))
-           method# (try (.getDeclaredMethod ^Class parent# ~(str m) arg-types#)
-                        (catch java.lang.NoSuchMethodException e#
-                          (throw (IllegalArgumentException.
-                                   (str "Cannot find method " ~(str m) " for class " parent#
-                                     " with signature " (vec arg-types#) ". Consider using typehints")))))
-           return-type# (.getReturnType ^java.lang.reflect.Method method#)
-           handle# (.findSpecial (java.lang.invoke.MethodHandles/lookup)
-                      parent#
-                      ~(str m)
-                      (if (empty? arg-types#)
-                        (java.lang.invoke.MethodType/methodType ^Class return-type#)
-                        (java.lang.invoke.MethodType/methodType ^Class return-type# ^{:tag "[Ljava.lang.Class;"} arg-types#))
-                      clazz#)]
-      (.invokeWithArguments handle# ^java.util.List (list ~instance ~@args)))))
-
-(defmacro invoke-field-handle [use-parent? instance field & arg]
-  (when (> (count arg) 1)
-    (throw (AssertionError. "Supports only one optional argument")))
-  `(let [[clazz# parent#] (get-class-from-instance ~use-parent? ~instance)
-         field-type# (.getType ^java.lang.reflect.Field (.getDeclaredField ^Class parent# ~(str field)))
-         handle# (. (java.lang.invoke.MethodHandles/lookup) ~(if (empty? arg) 'findGetter 'findSetter)
-                   parent# ~(str field) field-type#)]
-     (.invokeWithArguments handle# ^java.util.List (list ~instance ~@arg))))
-
-(defmacro p-get [instance f]
-  `(invoke-field-handle false ~instance ~f))
-
-(defmacro p-set! [instance f arg]
-  `(invoke-field-handle false ~instance ~f ~arg))
-
-(defmacro s-get [this f]
-  `(invoke-field-handle true ~this ~f))
-
-(defmacro s-set! [this f arg]
-  `(invoke-field-handle true ~this ~f ~arg))
+        _ (when (> (count inits) 1) (throw (AssertionError. "Only one instance init block is allowe")))
+        ctors (map (partial expand-ctor name classname fields) ctors)
+        init (first inits)]
+    (if (empty? init)
+      (reduce #(cons %2 %1) methods ctors)
+      (let [init-this (-> init second first)
+            init-logic (drop 2 init)
+            blank-ctor (list (with-meta name {:init true}) [init-this] nil)
+            ctors (map (fn [x]
+                          (let [[_ [ctor-this & args] super & body] x
+                                idx (if (some #(= (first super) %) ['super! 'this!]) 3 2)
+                                [head tail] (split-at idx x)]
+                            (when (and (not= ctor-this init-this)
+                                       (not= init-this (symbol "_")))
+                              (throw (AssertionError. (str "'this' name in ctor and instance init section have to "
+                                "be equal. Got: " init-this " and " ctor-this))))
+                            (apply concat [head init-logic tail])))
+                    (if-not (empty? ctors) ctors (cons blank-ctor ctors)))]
+        (reduce #(cons %2 %1) methods ctors)))))
 
 (defmacro defclass [name fields & opts+specs]
   (validate-fields fields name)

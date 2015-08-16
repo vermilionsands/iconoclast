@@ -4,7 +4,7 @@ A little experiment in clojure/java interop borne out of curiosity of what would
 
 ## Caveat emptor
 
-It's still just a toy project. Also, gen-class, deftype or reify are probably enough for normal use-cases.
+It's currently just a toy project. Also, gen-class, deftype or reify are probably enough.
 
 ## Usage
 Check test/iconoclast/test/utils/examples.clj for some examples. It's quite similar to deftype, with additional metadata

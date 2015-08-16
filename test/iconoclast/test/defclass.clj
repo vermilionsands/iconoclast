@@ -403,3 +403,15 @@
   (testing "ctor arg annotations"
     (is (= (.annotationType (aget (.getParameterAnnotations (.getConstructor DeprecatedClass (i/sig Object))) 0 0))
            java.lang.Deprecated))))
+
+(deftest function-calls
+  (testing "calling fuctions from outside"
+    (let [x (SampleClass.)]
+      (is (= (.callFoo x) "foo"))
+      (is (= (SampleClass/staticCallFoo) "foo"))
+      (is (= (SampleClass/callCallFoo x) "foo"))
+      (is (= (.callBar x "a" "b") "bar a b"))
+      (is (= (SampleClass/staticCallBar "a" "b") "bar a b"))
+      (is (= (SampleClass/callCallBar x "a" "b") "bar a b"))
+      (is (= (NonPublicFieldsClass/callSampleClass x) "foo"))
+      (is (= (NonPublicFieldsClass/callSampleClass) "foo")))))

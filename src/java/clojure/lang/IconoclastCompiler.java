@@ -3986,6 +3986,7 @@ public class IconoclastCompiler implements Opcodes {
     int classAccess;
     boolean skipDefaultCtors;
     boolean skipDefaultStaticBlock;
+    boolean loadNs;
 
     public final String name() {
       return name;
@@ -4196,6 +4197,7 @@ public class IconoclastCompiler implements Opcodes {
         if (keywordCallsites.count() > 0) {
           emitKeywordCallsites(clinitgen);
         }
+        emitNamespace(clinitgen);
         clinitgen.returnValue();
         clinitgen.endMethod();
       }
@@ -4635,6 +4637,27 @@ public class IconoclastCompiler implements Opcodes {
       }
     }
 
+    void emitNamespace(GeneratorAdapter clinitgen) {
+      //based on the patch for http://dev.clojure.org/jira/browse/CLJ-1208
+      //TODO change when this is integrated into 1.8
+      //and optionally move to clj code
+      if(isDefclass() && loadNs) {
+        
+        String nsname = RT.fourth(src).toString();
+        if (!nsname.equals("clojure.core")) {
+          clinitgen.push("clojure.core");
+          clinitgen.push("require");
+          clinitgen.invokeStatic(RT_TYPE, Method.getMethod("clojure.lang.Var var(String,String)"));
+          clinitgen.invokeVirtual(VAR_TYPE,Method.getMethod("Object getRawRoot()"));
+          clinitgen.checkCast(IFN_TYPE);
+          clinitgen.push(nsname);
+          clinitgen.invokeStatic(SYMBOL_TYPE, Method.getMethod("clojure.lang.Symbol create(String)"));
+          clinitgen.invokeInterface(IFN_TYPE, Method.getMethod("Object invoke(Object)"));
+          clinitgen.pop();
+        }
+      }
+    }
+    
     void emitConstants(GeneratorAdapter clinitgen) {
       try {
         Var.pushThreadBindings(RT.map(RT.PRINT_DUP, RT.T));
@@ -7207,6 +7230,8 @@ public class IconoclastCompiler implements Opcodes {
         rform = rform.next();
         Symbol classname = (Symbol) rform.first();
         rform = rform.next();
+        //String enclosingNs = rform.first().toString();
+        rform = rform.next();
         IPersistentVector fields = (IPersistentVector) rform.first();
         rform = rform.next();
         IPersistentMap opts = PersistentHashMap.EMPTY;
@@ -7263,6 +7288,8 @@ public class IconoclastCompiler implements Opcodes {
       if (thisSym != null) {
         ret.thisName = thisSym.name;
       }
+      
+      ret.loadNs = RT.booleanCast(RT.get(ret.classMeta, Keyword.intern("load-ns")));
 
       if (fieldSyms != null) {
         IPersistentMap fmap = PersistentHashMap.EMPTY;
@@ -8046,9 +8073,12 @@ public class IconoclastCompiler implements Opcodes {
       }
 
       try {
-        superClass.getDeclaredConstructor(superCtorClasses);
+        Constructor sctor = superClass.getDeclaredConstructor(superCtorClasses);
+        if (java.lang.reflect.Modifier.isPrivate(sctor.getModifiers()) && !useThisAsSuperCtor) {
+          throw new NoSuchMethodException();
+        }
       } catch (NoSuchMethodException e) {
-        throw new IllegalArgumentException("Cannot find super ctor for class: " + superClass.getName() + " and types " + tv);
+        throw new IllegalArgumentException("Cannot find accessible super ctor for class: " + superClass.getName() + " and types " + tv);
       } catch (Exception e) {
         //nothing
       }
@@ -8435,6 +8465,7 @@ public class IconoclastCompiler implements Opcodes {
             if (obj.keywordCallsites.count() > 0) {
               obj.emitKeywordCallsites(gen);
             }
+            obj.emitNamespace(gen);
           }
 
           if (retClass != null) {
