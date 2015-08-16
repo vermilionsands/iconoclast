@@ -72,7 +72,7 @@
                                                  :else 2)]
                                          (update-in acc [k] #(cons x %))))
                                [[] [] []] methods)
-        _ (when (> (count inits) 1) (throw (AssertionError. "Only one instance init block is allowe")))
+        _ (when (> (count inits) 1) (throw (AssertionError. "Only one instance init section is allowed")))
         ctors (map (partial expand-ctor name classname fields) ctors)
         init (first inits)]
     (if (empty? init)
