@@ -93,6 +93,97 @@
         (reduce #(cons %2 %1) methods ctors)))))
 
 (defmacro defclass [name fields & opts+specs]
+  "See deftype documentation.
+
+  Name supports additional metadata:
+  :nonfinal - makes class non final (by default class is final)
+  :abstract - makes class abstract
+  :load-ns - makes class automatically load enclosing ns
+
+  Fields:
+
+  Typehinted fields will have the type of the hint. By default
+  fields are final (immutable).
+
+  Additional metadata on field name:
+  :private, :public, :protected - visibility modifiers
+  :static - makes field static
+  :mutable - same as :unsychronized-mutable
+  :array - field will be an array, in order to specify number of
+           dimensions use {:array n}. If no typehint is specified
+           it will be an array of Objects, otherwise an array of
+           type from the typehint
+  :get, :set - will generate public getter and setter for the field
+               Method names are (for field F) getF and setF.
+
+  Methods:
+
+  Methods not in interfaces can be declared using :defm metadata
+  on methodname. Hint on methodname will define return type and
+  hints on methodargs will define the types of the arguments.
+
+  Methods can be marked as constructors using :init metadata on
+  methodname. To call a construtor from parent you can use
+  (super! args*) as the first element of the constructor body.
+  To call other constructor from the same class use (this! args).
+  If no constructor is declared one constructor setting all fields
+  will be generated (like in deftype). You can also declare
+  constructors on the form of:
+  (^:init name [this field*]) - if all fields names can be matched
+  with fields from fields declaration and there is no body logic
+  will be generated automatically. Such constructor will set fields
+  that have the names that are equal to name of its arguments.
+
+  You can define initialization blocks per instance and per class.
+  To define instance initializitaion block mark method name with
+  :instance-init metadata. Instance init accepts only one argument
+  that will correspond to 'this'. It will be merged with constructors
+  and called before their logic.
+
+  To create a static initialization block mark method name with
+  :static-init.
+
+  In order to initialize final fields in constructors or initialization
+  blocks use (init-set! field valexpr). Field has to be a symbol, as
+  defined in fields.
+
+  Additional metadata on method name:
+  :private, :public, :protected - visibility modifiers
+  :final - makes method final
+  :static - makes method static. Static methods don't have the first
+            parameter, that corresponds to the target object ('this')
+  :abstract - makes method abstract
+  :defm - marks method as declared in this class
+  :init - marks method as constructor
+  :instance-init - marks method as instance init block
+  :static-init - marks method as static init block
+  :varargs - marks method as a vararg method, last argument of the method
+             has to be an array
+  :array - same as for fields, makes return type an array
+
+  Additional metadata on method arguments:
+  :array - same as for fields
+
+  Parent class:
+  Add parent class just like interface in spec. There can be only
+  one inherited class.
+
+  Accessing fields and methods from parent class:
+  If the field is not visible and would be accessed using .super
+  in Java it can be accessed using iconoclast.reflect/s-get and s-set!
+  macros: (s-get instance field) and (s-set! instance field value).
+  Methods from parent class that are also defined in inheriting class
+  can be accessed using iconoclast.reflect/s-invoke:
+  (s-invoke instance method & args)
+
+
+  Accessing protected fields and method from parent class:
+  When accessing protected fields or methods from instance
+  of a parent class you can use iconoclast.reclect/p-get, p-set!
+  and p-invoke.
+
+  No factory functions will be defined."
+  
   (validate-fields fields name)
   (let [gname name
         ns-part (namespace-munge *ns*)

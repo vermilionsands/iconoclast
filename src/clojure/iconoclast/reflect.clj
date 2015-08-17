@@ -7,12 +7,6 @@
                      `(class ~instance))])
 
 (defmacro p-invoke [instance m & args]
-  `(invoke-method true ~instance ~m ~@args))
-
-(defmacro s-invoke' [instance m & args]
-  `(invoke-method false ~instance ~m ~@args))
-
-(defmacro p-invoke [instance m & args]
   (let [tags (vec (map #(:tag (:meta %)) args))]
     `(let [clazz# (class ~instance)
            arg-types# (when (not-empty ~tags) (into-array Class (vec (map resolve-tag ~tags))))
