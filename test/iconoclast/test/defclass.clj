@@ -2,7 +2,7 @@
   (:require [clojure.test :refer :all]
             [iconoclast.test.utils.inspect :as i])
   (:import [java.lang.reflect Modifier]
-           [iconoclast.test.utils.examples AbstractSampleClass SampleClass NonPublicFieldsClass DefaultCtorClass
+           [iconoclast.test.example.examples AbstractSampleClass SampleClass NonPublicFieldsClass DefaultCtorClass
                                            ParentClass ChildClass SampleInterface DeprecatedClass]))
 
 (deftest final-and-nonfinal-class

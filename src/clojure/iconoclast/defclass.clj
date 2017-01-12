@@ -1,5 +1,5 @@
 (ns iconoclast.defclass
-  (:use [iconoclast.other.utils])
+  (:require [iconoclast.other.utils :as utils])
   (:import [clojure.lang IconoclastCompiler]))
 
 (defn- custom-eval [form]
@@ -14,7 +14,7 @@
           ~@methods))))
 
 (defn- accessor-name [prefix field-name]
-  (symbol (str prefix (Character/toUpperCase (first field-name)) (.substring field-name 1))))
+  (symbol (str prefix (Character/toUpperCase ^Character (first field-name)) (.substring field-name 1))))
 
 (defn- create-getter [field]
   (let [method-name (with-meta (accessor-name "get" (str field))
@@ -47,7 +47,7 @@
 (defn- ctor-meta [name classname [_ _ & [[head & rest]] :as ctor-form]]
   (if (or (= head 'this!)
           (= head 'super!))
-    (apply list (assoc-in (vec ctor-form) [2] (apply list (cons head (map #(update-method-meta name classname %) rest)))))
+    (apply list (assoc-in (vec ctor-form) [2] (apply list (cons head (map #(utils/update-method-meta name classname %) rest)))))
     ctor-form))
 
 (defn- expand-ctor [name classname fields ctor-form]
@@ -81,18 +81,18 @@
             init-logic (drop 2 init)
             blank-ctor (list (with-meta name {:init true}) [init-this] nil)
             ctors (map (fn [x]
-                          (let [[_ [ctor-this & args] super & body] x
+                          (let [[_ [ctor-this & _] super & _] x
                                 idx (if (some #(= (first super) %) ['super! 'this!]) 3 2)
                                 [head tail] (split-at idx x)]
                             (when (and (not= ctor-this init-this)
                                        (not= init-this (symbol "_")))
                               (throw (AssertionError. (str "'this' name in ctor and instance init section have to "
-                                "be equal. Got: " init-this " and " ctor-this))))
+                                                       "be equal. Got: " init-this " and " ctor-this))))
                             (apply concat [head init-logic tail])))
                     (if-not (empty? ctors) ctors (cons blank-ctor ctors)))]
         (reduce #(cons %2 %1) methods ctors)))))
 
-(defmacro defclass [name fields & opts+specs]
+(defmacro defclass [& class-spec]
   "See deftype documentation.
 
   Name supports additional metadata:
@@ -179,21 +179,21 @@
 
   Accessing protected fields and method from parent class:
   When accessing protected fields or methods from instance
-  of a parent class you can use iconoclast.reclect/p-get, p-set!
+  of a parent class you can use iconoclast.reflect/p-get, p-set!
   and p-invoke.
 
   No factory functions will be defined."
-  
-  (validate-fields fields name)
-  (let [gname name
+  (let [[name fields & opts+specs] (utils/merge-schema-with-meta class-spec)
+        _ (utils/validate-fields fields name)
+        gname name
         ns-part (namespace-munge *ns*)
         classname (symbol (str ns-part "." gname))
-        [interfaces methods opts] (parse-opts+specs opts+specs name classname)
-        hinted-fields (update-fields-meta name classname fields)
+        [interfaces methods _] (utils/parse-opts+specs opts+specs name classname)
+        hinted-fields (utils/update-fields-meta name classname fields)
         methods (->> methods
                      (merge-init-with-ctors name classname hinted-fields)
                      (append-getters-setters hinted-fields))]
     `(do
        ~(emit-defclass* name gname (vec hinted-fields) (vec interfaces) methods)
-       (import ~classname)
-       ~classname)))
+        (import ~classname)
+        ~classname)))

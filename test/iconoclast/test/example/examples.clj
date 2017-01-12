@@ -1,4 +1,4 @@
-(ns iconoclast.test.utils.examples
+(ns iconoclast.test.example.examples
   (:require [iconoclast.defclass :refer :all]
             [iconoclast.reflect :refer :all]
             [iconoclast.definterface :as interface])
@@ -30,24 +30,24 @@
 
 ;final class
 (defclass ^:load-ns SampleClass [a                                                         ;Object, final, public field
-                       ^:mutable aMutable                                        ;Object, unsynchronized-mutable
-                       ^:mutable ^:array aArr                                    ;Object array
-                       ^:mutable ^:static aStatic                                ;static field
-                       ^:mutable ^:static ^:array aStaticArray
-                       ^:mutable ^int b
-                       ^:mutable ^ints bArr
-                       ^:mutable ^:static ^int bStatic
-                       ^:mutable ^:static ^:array ^int bStaticArray
-                       ^:mutable ^String c
-                       ^:mutable ^{:array 2} ^String cArr
-                       ^:mutable ^:static ^String cStatic
-                       ^:mutable ^:static ^:array ^String cStaticArray
-                       ^:mutable ^SampleClass d
-                       ^:mutable ^:array ^SampleClass dArr
-                       ^:mutable ^:static ^SampleClass dStatic
-                       ^:mutable ^:static ^:array ^SampleClass dStaticArray
-                       defaultField
-                       ^:static defaultStaticField]
+                                  ^:mutable aMutable                                        ;Object, unsynchronized-mutable
+                                  ^:mutable ^:array aArr                                    ;Object array
+                                  ^:mutable ^:static aStatic                                ;static field
+                                  ^:mutable ^:static ^:array aStaticArray
+                                  ^:mutable ^int b
+                                  ^:mutable ^ints bArr
+                                  ^:mutable ^:static ^int bStatic
+                                  ^:mutable ^:static ^:array ^int bStaticArray
+                                  ^:mutable ^String c
+                                  ^:mutable ^{:array 2} ^String cArr
+                                  ^:mutable ^:static ^String cStatic
+                                  ^:mutable ^:static ^:array ^String cStaticArray
+                                  ^:mutable ^SampleClass d
+                                  ^:mutable ^:array ^SampleClass dArr
+                                  ^:mutable ^:static ^SampleClass dStatic
+                                  ^:mutable ^:static ^:array ^SampleClass dStaticArray
+                                  defaultField
+                                  ^:static defaultStaticField]
   ;should be added to each constructor
   (^:instance-init SampleClass [this] (init-set! defaultField "default"))
   ;static init block
@@ -279,3 +279,4 @@
 (defclass ^{Deprecated true} DeprecatedClass [^{Deprecated true} a]
   (^:init ^{Deprecated true} DeprecatedClass [this ^{Deprecated true} arg] nil)
   (^:defm ^{Deprecated true} foo [this ^{Deprecated true} arg] nil))
+

@@ -9,7 +9,8 @@
 ;   Based on the core_deftype.clj from the original clojure distribution.
 ;   vermilionsands 2015
 
-(ns iconoclast.other.utils)
+(ns iconoclast.other.utils
+  (:require [iconoclast.other.schema :as schema]))
 
 (def hardcoded-classes
   (let [f (fn [c] (.getClass (make-array c 0)))]
@@ -37,7 +38,7 @@
     (try
       (if (> (.indexOf name ".") 0)
           (clojure.lang.RT/classForName name)
-          (let [c (.getMapping *ns* sym)]
+          (let [c (.getMapping ^clojure.lang.Namespace *ns* sym)]
             (if (class? c)
               c
               (clojure.lang.RT/classForName name))))
@@ -56,9 +57,9 @@
 (defn get-array-type
   ([type] (get-array-type type 1))
   ([type d]
-    (when (< d 1)
-      (throw (IllegalArgumentException. "Array dimension cannot be lower than 1")))
-    (.getClass (apply make-array type (repeat d 0)))))
+   (when (< d 1)
+     (throw (IllegalArgumentException. "Array dimension cannot be lower than 1")))
+   (.getClass (apply make-array type (repeat d 0)))))
 
 (defn meta-arr-to-hint [ns+classname m]
   (let [d (:array m)
@@ -155,11 +156,29 @@
                        (disj 'Object 'java.lang.Object 'not-in-interface)
                        vec)
         methods (let [f (fn [x] (update-method-meta classname ns+classname x))]
-                  (->> (map (fn [[name params & body]]
-                              (cons name (maybe-destructured params body)))
-                            (apply concat (vals impls)))
-                       (map (fn [[name params & body]]
-                              (reduce #(cons %2 %1) body [(vec (map f params)) (f name)])))))]
+                  (->>
+                    (apply concat (vals impls))
+                    (map (fn [[name params & body]]
+                           (cons name (maybe-destructured params body))))
+                    (map (fn [[name params & body]]
+                           (reduce #(cons %2 %1) body [(vec (map f params)) (f name)])))))]
     (when-let [bad-opts (seq (remove #{:no-print} (keys opts)))]
-      (throw (IllegalArgumentException. (apply print-str "Unsupported option(s) -" bad-opts))))
+      (throw (IllegalArgumentException. ^String (apply print-str "Unsupported option(s) -" bad-opts))))
     [interfaces methods opts]))
+
+(defn merge-schema-with-meta
+  ([spec]
+   (merge-schema-with-meta spec true))
+  ([spec recur?]
+   (let [[name+spec fields+spec & more] (schema/split-spec-with-schema spec)
+         [name] (schema/process-arrow-schematized-args name+spec)
+         fields (schema/process-arrow-schematized-args fields+spec)
+         more (when more
+                (if-not recur?
+                  more
+                  (mapv (fn [x]
+                         (if (symbol? x) ;; ignore symbols for classes/interfaces
+                           x
+                           `(~@(merge-schema-with-meta x false))))
+                       more)))]
+     `(~name ~fields ~@more))))

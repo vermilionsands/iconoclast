@@ -17,8 +17,8 @@
                                      " with signature " (vec arg-types#) ". Consider using typehints")))))
            return-type# (.getReturnType ^java.lang.reflect.Method method#)]
         (if (empty? arg-types#)
-            (.invoke ^java.lang.reflect.Method method# ~instance)
-            (.invoke ^java.lang.reflect.Method method# ~instance (into-array Object (list ~@args)))))))
+          (.invoke ^java.lang.reflect.Method method# ~instance)
+          (.invoke ^java.lang.reflect.Method method# ~instance (into-array Object (list ~@args)))))))
 
 (defmacro s-invoke [instance m & args]
   (let [tags (vec (map #(:tag (:meta %)) args))]

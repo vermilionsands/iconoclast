@@ -2,7 +2,7 @@
   (:require [clojure.test :refer :all]
             [iconoclast.test.utils.inspect :as i])
   (:import  [java.lang.reflect Modifier]
-            [iconoclast.test.utils.examples SampleInterface]))
+            [iconoclast.test.example.examples SampleInterface]))
 
 (deftest interface-signature
   (testing "interface signature"

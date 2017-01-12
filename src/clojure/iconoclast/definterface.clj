@@ -1,13 +1,13 @@
 (ns iconoclast.definterface
   (:refer-clojure :exclude [definterface])
-  (:use [iconoclast.other.utils]))
+  (:require [iconoclast.other.utils :as utils]))
 
 (defn- get-interface-tag
   [classname ns+classname sym]
   (let [default-tag (fn [x] (if (:tag x) x (assoc x :tag 'Object)))]
     (:tag (->> (meta sym) default-tag
-                          (meta-self-hint classname ns+classname)
-                          (meta-arr-to-hint ns+classname)))))
+                          (utils/meta-self-hint classname ns+classname)
+                          (utils/meta-arr-to-hint ns+classname)))))
 
 (defmacro definterface [name & sigs]
   (let [cname (with-meta (symbol (str (namespace-munge *ns*) "." name)) (meta name))
