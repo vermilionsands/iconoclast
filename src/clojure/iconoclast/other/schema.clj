@@ -5,9 +5,10 @@
 (defn normalized-metadata
   [imeta schema]
   (let [m (reduce (fn [acc x]
-                    (if (symbol? x)
-                      (assoc acc :tag x)
-                      (assoc acc x true)))
+                    (cond
+                      (symbol? x) (assoc acc :tag x)
+                      (map? x)    (conj acc x)
+                      :else       (assoc acc x true)))
                   {} (if (vector? schema) schema (list schema)))]
     (with-meta imeta (merge m (or (meta imeta) {})))))
 
