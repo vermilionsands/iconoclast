@@ -173,12 +173,11 @@
    (let [[name+spec fields+spec & more] (schema/split-spec-with-schema spec)
          [name] (schema/process-arrow-schematized-args name+spec)
          fields (schema/process-arrow-schematized-args fields+spec)
-         more (when more
-                (if-not recur?
-                  more
-                  (mapv (fn [x]
-                         (if (symbol? x) ;; ignore symbols for classes/interfaces
-                           x
-                           `(~@(merge-schema-with-meta x false))))
-                       more)))]
+         more (if-not (and more recur?)
+                more
+                (mapv (fn [x]
+                        (if (symbol? x) ;; ignore symbols for classes/interfaces
+                          x
+                          `(~@(merge-schema-with-meta x false))))
+                      more))]
      `(~name ~fields ~@more))))
