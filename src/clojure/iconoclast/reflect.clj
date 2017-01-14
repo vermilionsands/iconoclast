@@ -6,7 +6,7 @@
     ~(if use-parent? `(first (bases (class ~instance)))
                      `(class ~instance))])
 
-(defmacro p-invoke [instance m & args]
+(defmacro protected-invoke [instance m & args]
   (let [tags (vec (map #(:tag (:meta %)) args))]
     `(let [clazz# (class ~instance)
            arg-types# (when (not-empty ~tags) (into-array Class (vec (map resolve-tag ~tags))))
@@ -20,7 +20,7 @@
           (.invoke ^java.lang.reflect.Method method# ~instance)
           (.invoke ^java.lang.reflect.Method method# ~instance (into-array Object (list ~@args)))))))
 
-(defmacro s-invoke [instance m & args]
+(defmacro super-invoke [instance m & args]
   (let [tags (vec (map #(:tag (:meta %)) args))]
     `(let [[clazz# parent#] (get-class-from-instance true ~instance)
            arg-types# (when (not-empty ~tags) (into-array Class (vec (map resolve-tag ~tags))))
@@ -48,14 +48,14 @@
                    parent# ~(str field) field-type#)]
      (.invokeWithArguments handle# ^java.util.List (list ~instance ~@arg))))
 
-(defmacro p-get [instance f]
+(defmacro protected-get [instance f]
   `(invoke-field-handle false ~instance ~f))
 
-(defmacro p-set! [instance f arg]
+(defmacro protected-set! [instance f arg]
   `(invoke-field-handle false ~instance ~f ~arg))
 
-(defmacro s-get [this f]
+(defmacro super-get [this f]
   `(invoke-field-handle true ~this ~f))
 
-(defmacro s-set! [this f arg]
+(defmacro super-set! [this f arg]
   `(invoke-field-handle true ~this ~f ~arg))

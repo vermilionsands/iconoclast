@@ -241,8 +241,8 @@
     (init-set! c c))
   (^:static-init ChildClass [] (set! d "d"))
 
-  (bar [this] (* 2 (s-invoke this bar))) ;call bar from parent
-  (bar [this x] (* 2 (s-invoke this bar x)))
+  (bar [this] (* 2 (super-invoke this bar))) ;call bar from parent
+  (bar [this x] (* 2 (super-invoke this bar x)))
 
   ;get parent field
   (^:defm getA [this] (.a this))
@@ -251,8 +251,8 @@
   (^:defm setB [this b] (set! ParentClass/b b))
 
   ;not visible fields
-  (^:defm getCParent [this] (s-get this c))
-  (^:defm setCParent [this c] (s-set! this c (str c c)))
+  (^:defm getCParent [this] (super-get this c))
+  (^:defm setCParent [this c] (super-set! this c (str c c)))
   (^:defm getDParent [this] (ParentClass/d))
   (^:defm setDParent [this d] (set! ParentClass/d d))
 
@@ -264,15 +264,15 @@
 
   ;e won't be visible in this case when using (.e other)
   ;resort to method handles
-  (^:defm getEOther [this ^ParentClass other] (p-get other e))
-  (^:defm setEOther [this ^ParentClass other x] (p-set! other e x))
+  (^:defm getEOther [this ^ParentClass other] (protected-get other e))
+  (^:defm setEOther [this ^ParentClass other x] (protected-set! other e x))
   ;but it will be in this one
   (^:defm getEOther [this ^ChildClass other] (.e other))
   (^:defm setEOther [this ^ChildClass other x] (set! (.e other) x))
 
   ;calling protected methods and fields from parent
   (^:defm protectedParentMethod [this x] (.protectedMethod this x))
-  (^:defm protectedParentMethod [this ^ParentClass other x] (p-invoke other protectedMethod x))
+  (^:defm protectedParentMethod [this ^ParentClass other x] (protected-invoke other protectedMethod x))
   (^:defm protectedParentMethod [this ^ChildClass other x] (.protectedMethod other x))
   (^:defm protectedParentStaticMethod [this x] (ParentClass/protectedStaticMethod x)))
 
