@@ -175,9 +175,13 @@
          fields (schema/process-arrow-schematized-args fields+spec)
          more (if-not (and more recur?)
                 more
-                (mapv (fn [x]
-                        (if (symbol? x) ;; ignore symbols for classes/interfaces
-                          x
-                          `(~@(merge-schema-with-meta x false))))
-                      more))]
+                (loop [out [] [x y & rs :as xs] more]
+                  (cond
+                    (empty? xs)  out
+                    ;; interfaces and classes
+                    (symbol? x)  (recur (conj out x) (rest xs))
+                    ;; options
+                    (keyword? x) (recur (conj out x y) rs)
+                    ;; methods
+                    :else (      recur (conj out `(~@(merge-schema-with-meta x false))) (rest xs)))))]
      `(~name ~fields ~@more))))
