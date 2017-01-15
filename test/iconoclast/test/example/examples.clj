@@ -104,22 +104,22 @@
   (setBWithDot :- :defm [this b] (set! (.b this) b))
   (setCWithDot :- :defm [this c] (set! (.c this) c))
   (setDWithDot :- :defm [this d] (set! (.d this) d))
-  (getAStatic :- [:defm :static] [] aStatic)
-  (getBStatic :- [:defm :static] [] bStatic)
-  (getCStatic :- [:defm :static] [] cStatic)
-  (getDStatic :- [:defm :static] [] dStatic)
-  (getAStaticWithDot :- [:defm :static] [] (SampleClass/aStatic))
-  (getBStaticWithDot :- [:defm :static] [] (SampleClass/bStatic))
-  (getCStaticWithDot :- [:defm :static] [] (SampleClass/cStatic))
-  (getDStaticWithDot :- [:defm :static] [] (SampleClass/dStatic))
-  (setAStatic :- [:defm :static] [x] (set! aStatic x))
-  (setBStatic :- [:defm :static] [x :- int] (set! bStatic x))
-  (setCStatic :- [:defm :static] [x] (set! cStatic x))
-  (setDStatic :- [:defm :static] [x] (set! dStatic x))
-  (setAStaticWithDot :- [:defm :static] [aStatic] (set! SampleClass/aStatic aStatic))
-  (setBStaticWithDot :- [:defm :static] [bStatic] (set! SampleClass/bStatic bStatic))
-  (setCStaticWithDot :- [:defm :static] [cStatic] (set! SampleClass/cStatic cStatic))
-  (setDStaticWithDot :- [:defm :static] [dStatic] (set! SampleClass/dStatic dStatic))
+  (getAStatic :- :static [] aStatic)
+  (getBStatic :- :static [] bStatic)
+  (getCStatic :- :static [] cStatic)
+  (getDStatic :- :static [] dStatic)
+  (getAStaticWithDot :- :static [] (SampleClass/aStatic))
+  (getBStaticWithDot :- :static [] (SampleClass/bStatic))
+  (getCStaticWithDot :- :static [] (SampleClass/cStatic))
+  (getDStaticWithDot :- :static [] (SampleClass/dStatic))
+  (setAStatic :- :static [x] (set! aStatic x))
+  (setBStatic :- :static [x :- int] (set! bStatic x))
+  (setCStatic :- :static [x] (set! cStatic x))
+  (setDStatic :- :static [x] (set! dStatic x))
+  (setAStaticWithDot :- :static [aStatic] (set! SampleClass/aStatic aStatic))
+  (setBStaticWithDot :- :static [bStatic] (set! SampleClass/bStatic bStatic))
+  (setCStaticWithDot :- :static [cStatic] (set! SampleClass/cStatic cStatic))
+  (setDStaticWithDot :- :static [dStatic] (set! SampleClass/dStatic dStatic))
 
   ;some additional methods to check arrays and signatures
   (getAArr :- [:defm :array][this] aArr)
@@ -148,10 +148,10 @@
 
   (callFoo :- :defm [this] (foo))
   (callBar :- :defm [this x y] (bar x y))
-  (staticCallFoo :- [:defm :static] [] (foo))
-  (staticCallBar :- [:defm :static] [x y] (bar x y))
-  (callCallFoo :- [:defm :static] [x :- SampleClass] (.callFoo x))
-  (callCallBar :- [:defm :static] [x :- SampleClass y z] (.callBar x y z)))
+  (staticCallFoo :- :static [] (foo))
+  (staticCallBar :- :static [x y] (bar x y))
+  (callCallFoo :- :static [x :- SampleClass] (.callFoo x))
+  (callCallBar :- :static [x :- SampleClass y z] (.callBar x y z)))
 
 (defclass NonPublicFieldsClass [aProtected :- [:final :protected]
                                 ;private mutable field with automatically generated setter and getter
@@ -170,14 +170,14 @@
   (NonPublicFieldsClass :- :init [this])
 
   ;for static fields
-  (getAStaticPrivate :- [:defm :static] [] (NonPublicFieldsClass/aStaticPrivate))
-  (getBStaticPrivate :- [:defm :static] [] (NonPublicFieldsClass/bStaticPrivate))
-  (getCStaticPrivate :- [:defm :static] [] (NonPublicFieldsClass/cStaticPrivate))
-  (getDStaticPrivate :- [:defm :static] [] (NonPublicFieldsClass/dStaticPrivate))
-  (setAStaticPrivate :- [:defm :static] [x] (set! NonPublicFieldsClass/aStaticPrivate x))
-  (setBStaticPrivate :- [:defm :static] [x] (set! NonPublicFieldsClass/bStaticPrivate x))
-  (setCStaticPrivate :- [:defm :static] [x] (set! NonPublicFieldsClass/cStaticPrivate x))
-  (setDStaticPrivate :- [:defm :static] [x] (set! NonPublicFieldsClass/dStaticPrivate x))
+  (getAStaticPrivate :- :static [] (NonPublicFieldsClass/aStaticPrivate))
+  (getBStaticPrivate :- :static [] (NonPublicFieldsClass/bStaticPrivate))
+  (getCStaticPrivate :- :static [] (NonPublicFieldsClass/cStaticPrivate))
+  (getDStaticPrivate :- :static [] (NonPublicFieldsClass/dStaticPrivate))
+  (setAStaticPrivate :- :static [x] (set! NonPublicFieldsClass/aStaticPrivate x))
+  (setBStaticPrivate :- :static [x] (set! NonPublicFieldsClass/bStaticPrivate x))
+  (setCStaticPrivate :- :static [x] (set! NonPublicFieldsClass/cStaticPrivate x))
+  (setDStaticPrivate :- :static [x] (set! NonPublicFieldsClass/dStaticPrivate x))
 
   ;additional getters and setters, that are not generated with :get and :set
   (getAPrivateWithoutDot :- :defm [this] aPrivate)
@@ -188,14 +188,14 @@
   (setBPrivateWithoutDot :- :defm [this x :- int] (set! bPrivate x))
   (setCPrivateWithoutDot :- :defm [this x] (set! cPrivate x))
   (setDPrivateWithoutDot :- :defm [this x] (set! dPrivate x))
-  (getAStaticPrivateWithoutDot :- [:defm :static] [] aStaticPrivate)
-  (getBStaticPrivateWithoutDot :- [:defm :static] [] bStaticPrivate)
-  (getCStaticPrivateWithoutDot :- [:defm :static] [] cStaticPrivate)
-  (getDStaticPrivateWithoutDot :- [:defm :static] [] dStaticPrivate)
-  (setAStaticPrivateWithoutDot :- [:defm :static] [x] (set! aStaticPrivate x))
-  (setBStaticPrivateWithoutDot :- [:defm :static] [x :- int] (set! bStaticPrivate x))
-  (setCStaticPrivateWithoutDot :- [:defm :static] [x] (set! cStaticPrivate x))
-  (setDStaticPrivateWithoutDot :- [:defm :static] [x] (set! dStaticPrivate x))
+  (getAStaticPrivateWithoutDot :- :static [] aStaticPrivate)
+  (getBStaticPrivateWithoutDot :- :static [] bStaticPrivate)
+  (getCStaticPrivateWithoutDot :- :static [] cStaticPrivate)
+  (getDStaticPrivateWithoutDot :- :static [] dStaticPrivate)
+  (setAStaticPrivateWithoutDot :- :static [x] (set! aStaticPrivate x))
+  (setBStaticPrivateWithoutDot :- :static [x :- int] (set! bStaticPrivate x))
+  (setCStaticPrivateWithoutDot :- :static [x] (set! cStaticPrivate x))
+  (setDStaticPrivateWithoutDot :- :static [x] (set! dStaticPrivate x))
 
   ;should fail at runtime, since there's no typehint and reflector
   ;cannot access private fields
@@ -213,8 +213,8 @@
   (setOtherBPrivate :- :defm [this other :- NonPublicFieldsClass x] (set! (.bPrivate other) x))
   (setOtherDPrivate :- :defm [this other :- NonPublicFieldsClass x] (set! (.dPrivate other) x))
 
-  (callSampleClass :- [:defm :static] [x :- SampleClass] (.callFoo x))
-  (callSampleClass :- [:defm :static] [] (.callFoo (SampleClass.))))
+  (callSampleClass :- :static [x :- SampleClass] (.callFoo x))
+  (callSampleClass :- :static [] (.callFoo (SampleClass.))))
 
 (defclass DefaultCtorClass [a :- [:get]
                             b :- [:get int]

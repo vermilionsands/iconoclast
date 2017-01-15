@@ -8241,7 +8241,7 @@ public class IconoclastCompiler implements Opcodes {
       boolean isMethodDeclared = (Boolean)RT.contains(RT.meta(name), Keyword.intern("defm")) && objx.isDefclass();
       boolean isMethodStaticBlock = (Boolean)RT.contains(RT.meta(name), Keyword.intern("static-init")) && objx.isDefclass();;
       isMethodStatic = isMethodStaticBlock ? isMethodStaticBlock : isMethodStatic;
-      isMethodDeclared =  isMethodStaticBlock ? isMethodStaticBlock : isMethodDeclared;
+      isMethodDeclared =  isMethodStatic ? isMethodStatic : isMethodDeclared;
 
       if (isMethodDeclared && isMethodAbstract && ((objx.classAccess & Opcodes.ACC_ABSTRACT) == 0)) {
         throw new IllegalArgumentException("Cannot declare abstract method in a non-abstract class");
