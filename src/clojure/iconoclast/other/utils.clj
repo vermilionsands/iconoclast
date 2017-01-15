@@ -33,6 +33,10 @@
      'boolean  (Boolean/TYPE)
      'void     (Void/TYPE)}))
 
+(def field-mutability-keys #{:mutable :unsynchronized-mutable :volatile-mutable :final})
+
+(def fields-visibility-keys #{:private :protected :public})
+
 (defn- resolve-classname [sym]
   (let [name (str sym)]
     (try
@@ -86,13 +90,26 @@
       (assoc m :tag classname)
       m)))
 
-(defn update-fields-meta [classname ns+classname fields]
-  (vec
-    (map (fn [x]
-           (with-meta x (->> (meta x) meta-mutable-to-unsynchronized
-                                      (meta-self-hint classname ns+classname)
-                                      (meta-arr-to-hint ns+classname))))
-      fields)))
+(defn meta-add-default-field-mutability [k m]
+  (if (and (seq (select-keys m field-mutability-keys)) k)
+    m
+    (assoc m k true)))
+
+(defn meta-add-default-field-visibility [k m]
+  (if (and (seq (select-keys m fields-visibility-keys)) k)
+    m
+    (assoc m k true)))
+
+
+(defn update-fields-meta [classname ns+classname fields opts]
+  (mapv (fn [x]
+          (with-meta x (->> (meta x)
+                            (meta-add-default-field-mutability (:fields-mutability opts))
+                            (meta-add-default-field-visibility (:fields-visibility opts))
+                            (meta-mutable-to-unsynchronized)
+                            (meta-self-hint classname ns+classname)
+                            (meta-arr-to-hint ns+classname))))
+    fields))
 
 (defn update-method-meta [classname ns+classname sym]
   (with-meta sym (->> (meta sym) (meta-self-hint classname ns+classname)
@@ -132,6 +149,12 @@
                     *ns* "." name " had: "
                     (apply str (interpose ", " non-syms)))))))))
 
+;; todo validate mutability, fields visibility
+
+(defn validate-options [opts]
+  (when-let [bad-opts (seq (remove #{:no-print :load-ns :fields-mutability :fields-visibility} (keys opts)))]
+    (throw (IllegalArgumentException. ^String (apply print-str "Unsupported option(s) -" bad-opts)))))
+
 (defn- parse-opts [s]
   (loop [opts {} [k v & rs :as s] s]
     (if (keyword? k)
@@ -162,8 +185,6 @@
                            (cons name (maybe-destructured params body))))
                     (map (fn [[name params & body]]
                            (reduce #(cons %2 %1) body [(vec (map f params)) (f name)])))))]
-    (when-let [bad-opts (seq (remove #{:no-print} (keys opts)))]
-      (throw (IllegalArgumentException. ^String (apply print-str "Unsupported option(s) -" bad-opts))))
     [interfaces methods opts]))
 
 (defn merge-schema-with-meta
@@ -183,5 +204,5 @@
                     ;; options
                     (keyword? x) (recur (conj out x y) rs)
                     ;; methods
-                    :else (      recur (conj out `(~@(merge-schema-with-meta x false))) (rest xs)))))]
+                    :else        (recur (conj out `(~@(merge-schema-with-meta x false))) (rest xs)))))]
      `(~name ~fields ~@more))))

@@ -188,8 +188,9 @@
         gname name
         ns-part (namespace-munge *ns*)
         classname (symbol (str ns-part "." gname))
-        [interfaces methods _] (utils/parse-opts+specs opts+specs name classname)
-        hinted-fields (utils/update-fields-meta name classname fields)
+        [interfaces methods opts] (utils/parse-opts+specs opts+specs name classname)
+        _ (utils/validate-options opts)
+        hinted-fields (utils/update-fields-meta name classname fields opts)
         methods (->> methods
                      (merge-init-with-ctors name classname hinted-fields)
                      (append-getters-setters hinted-fields))]

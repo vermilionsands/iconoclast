@@ -1,8 +1,7 @@
 (ns iconoclast.test.example.examples
   (:require [iconoclast.defclass :refer :all]
             [iconoclast.reflect :refer :all]
-            [iconoclast.definterface :as interface])
-  (:import [java.util List]))
+            [iconoclast.definterface :as interface]))
 
 (defn foo [] "foo")
 (defn bar [x y] (str "bar " x " " y))
@@ -31,25 +30,26 @@
 
 ;final class
 (defclass SampleClass :- [:load-ns]
-  [a                                                         ;Object, final, public field
-   aMutable     :- :mutable                                  ;Object, unsynchronized-mutable
-   aArr         :- [:mutable :array]                         ;Object array
-   aStatic      :- [:mutable :static]                        ;static field
-   aStaticArray :- [:mutable :static :array]
-   b            :- [:mutable int]
-   bArr         :- [:mutable :array int]
-   bStatic      :- [:mutable :static int]
-   bStaticArray :- [:mutable :static :array int]
-   c            :- [:mutable String]
-   cArr         :- [:mutable {:array 2} String]
-   cStatic      :- [:mutable :static String]
-   cStaticArray :- [:mutable :static :array String]
-   d            :- [:mutable SampleClass]
-   dArr         :- [:mutable :array SampleClass]
-   dStatic      :- [:mutable :static SampleClass]
-   dStaticArray :- [:mutable :static :array SampleClass]
-   defaultField
-   defaultStaticField :- :static]
+  [a            :- :final                         ;Object, final, public field
+   aMutable                                       ;Object, unsynchronized-mutable
+   aArr         :- [:array]                       ;Object array
+   aStatic      :- [:static]                      ;static field
+   aStaticArray :- [:static :array]
+   b            :- [int]
+   bArr         :- [:array int]
+   bStatic      :- [:static int]
+   bStaticArray :- [:static :array int]
+   c            :- [String]
+   cArr         :- [{:array 2} String]
+   cStatic      :- [:static String]
+   cStaticArray :- [:static :array String]
+   d            :- [SampleClass]
+   dArr         :- [:array SampleClass]
+   dStatic      :- [:static SampleClass]
+   dStaticArray :- [:static :array SampleClass]
+   defaultField :- [:final]
+   defaultStaticField :- [:static :final]]
+  :fields-mutability :mutable
 
   ;should be added to each constructor
   (SampleClass :- :instance-init [this] (init-set! defaultField "default"))
@@ -153,17 +153,19 @@
   (callCallFoo :- [:defm :static] [x :- SampleClass] (.callFoo x))
   (callCallBar :- [:defm :static] [x :- SampleClass y z] (.callBar x y z)))
 
-(defclass NonPublicFieldsClass [aProtected :- :protected
+(defclass NonPublicFieldsClass [aProtected :- [:final :protected]
                                 ;private mutable field with automatically generated setter and getter
-                                aPrivate :- [:get :set :mutable :private]
-                                bPrivate :- [:get :set :mutable :private int]
-                                cPrivate :- [:get :set :mutable :private String]
-                                dPrivate :- [:get :set :mutable :private NonPublicFieldsClass]
-                                dPrivateArr :- [:get :set :mutable :private :array NonPublicFieldsClass]
-                                aStaticPrivate :- [:mutable :private :static]
-                                bStaticPrivate :- [:mutable :private :static int]
-                                cStaticPrivate :- [:mutable :private :static String]
-                                dStaticPrivate :- [:mutable :private :static NonPublicFieldsClass]]
+                                aPrivate :- [:get :set]
+                                bPrivate :- [:get :set int]
+                                cPrivate :- [:get :set String]
+                                dPrivate :- [:get :set NonPublicFieldsClass]
+                                dPrivateArr :- [:get :set :array NonPublicFieldsClass]
+                                aStaticPrivate :- [:static]
+                                bStaticPrivate :- [:static int]
+                                cStaticPrivate :- [:static String]
+                                dStaticPrivate :- [:static NonPublicFieldsClass]]
+  :fields-mutability :mutable
+  :fields-visibility :private
 
   (NonPublicFieldsClass :- :init [this])
 
@@ -214,23 +216,25 @@
   (callSampleClass :- [:defm :static] [x :- SampleClass] (.callFoo x))
   (callSampleClass :- [:defm :static] [] (.callFoo (SampleClass.))))
 
-(defclass DefaultCtorClass [a :- [:get :private]
-                            b :- [:get :private int]
-                            c :- [:get :private String]
-                            d :- [:get :private DefaultCtorClass]
-                            aArr :- [:get :private :array]
-                            bArr :- [:get :private ints]
-                            cArr :- [:get :private {:array 2} String]
-                            dArr :- [:get :private :array DefaultCtorClass]
-                            e :- :static])
+(defclass DefaultCtorClass [a :- [:get]
+                            b :- [:get int]
+                            c :- [:get String]
+                            d :- [:get DefaultCtorClass]
+                            aArr :- [:get :array]
+                            bArr :- [:get ints]
+                            cArr :- [:get {:array 2} String]
+                            dArr :- [:get :array DefaultCtorClass]
+                            e :- [:public :static]]
+  :fields-visibility :private)
 
 (defclass ParentClass :- :nonfinal
-  [a :- :mutable
-   b :- [:mutable :static]
-   c :- :mutable
-   d :- [:mutable :static]
-   e :- [:protected :mutable String]
-   f :- [:protected :mutable :static]]
+  [a
+   b :- :static
+   c
+   d :- :static
+   e :- [:protected String]
+   f :- [:protected :static]]
+  :fields-mutability :mutable
 
   (ParentClass :- :init [this a] (init-set! a a))
   (foo :- :defm [this] 0)
