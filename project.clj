@@ -1,4 +1,4 @@
-(defproject iconoclast "0.2.3"
+(defproject iconoclast "0.2.4-SNAPSHOT"
   :description "Yet another java interop"
   :license {:name "Eclipse Public License"
             :url "http://www.eclipse.org/legal/epl-v10.html"}
