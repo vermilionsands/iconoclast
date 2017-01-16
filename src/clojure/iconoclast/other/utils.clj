@@ -33,9 +33,13 @@
      'boolean  (Boolean/TYPE)
      'void     (Void/TYPE)}))
 
+(def supported-options #{:no-print :load-ns :fields-mutability :fields-visibility :method-declaration-mode})
+
 (def field-mutability-keys #{:mutable :unsynchronized-mutable :volatile-mutable :final})
 
-(def fields-visibility-keys #{:private :protected :public})
+(def field-visibility-keys #{:private :protected :public})
+
+(def method-declaration-mode-keys #{:override :declare :infer})
 
 (defn- resolve-classname [sym]
   (let [name (str sym)]
@@ -90,30 +94,26 @@
       (assoc m :tag classname)
       m)))
 
-(defn meta-add-default-field-mutability [k m]
-  (if (and (seq (select-keys m field-mutability-keys)) k)
+(defn meta-add-default-option [option-set k m]
+  (if (and (seq (select-keys m option-set)) k)
     m
     (assoc m k true)))
 
-(defn meta-add-default-field-visibility [k m]
-  (if (and (seq (select-keys m fields-visibility-keys)) k)
-    m
-    (assoc m k true)))
-
-
-(defn update-fields-meta [classname ns+classname fields opts]
+(defn update-fields-meta [classname ns+classname fields {:keys [fields-mutability fields-visibility]}]
   (mapv (fn [x]
           (with-meta x (->> (meta x)
-                            (meta-add-default-field-mutability (:fields-mutability opts))
-                            (meta-add-default-field-visibility (:fields-visibility opts))
+                            (meta-add-default-option field-mutability-keys fields-mutability)
+                            (meta-add-default-option field-visibility-keys fields-visibility)
                             (meta-mutable-to-unsynchronized)
                             (meta-self-hint classname ns+classname)
                             (meta-arr-to-hint ns+classname))))
     fields))
 
-(defn update-method-meta [classname ns+classname sym]
-  (with-meta sym (->> (meta sym) (meta-self-hint classname ns+classname)
-                                 (meta-arr-to-hint ns+classname))))
+(defn update-method-meta [classname ns+classname {:keys [method-declaration-mode]} sym]
+  (with-meta sym (->> (meta sym)
+                      (meta-add-default-option method-declaration-mode-keys method-declaration-mode)
+                      (meta-self-hint classname ns+classname)
+                      (meta-arr-to-hint ns+classname))))
 
 (defn- maybe-destructured
   [params body]
@@ -149,10 +149,8 @@
                     *ns* "." name " had: "
                     (apply str (interpose ", " non-syms)))))))))
 
-;; todo validate mutability, fields visibility
-
 (defn validate-options [opts]
-  (when-let [bad-opts (seq (remove #{:no-print :load-ns :fields-mutability :fields-visibility} (keys opts)))]
+  (when-let [bad-opts (seq (remove supported-options (keys opts)))]
     (throw (IllegalArgumentException. ^String (apply print-str "Unsupported option(s) -" bad-opts)))))
 
 (defn- parse-opts [s]
@@ -178,7 +176,7 @@
                        set
                        (disj 'Object 'java.lang.Object 'not-in-interface)
                        vec)
-        methods (let [f (fn [x] (update-method-meta classname ns+classname x))]
+        methods (let [f (fn [x] (update-method-meta classname ns+classname opts x))]
                   (->>
                     (apply concat (vals impls))
                     (map (fn [[name params & body]]

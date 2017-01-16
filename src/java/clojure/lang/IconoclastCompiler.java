@@ -81,6 +81,7 @@ public class IconoclastCompiler implements Opcodes {
   static final Keyword protocolKey = Keyword.intern(null, "protocol");
   static final Keyword onKey = Keyword.intern(null, "on");
   static Keyword dynamicKey = Keyword.intern("dynamic");
+  static final Keyword loadNsKey = Keyword.intern("load-ns");
 
   //access keywords
   public static final Keyword ACCESS_PUBLIC_FLAG = Keyword.intern(null, "public");
@@ -7239,6 +7240,9 @@ public class IconoclastCompiler implements Opcodes {
           opts = opts.assoc(rform.first(), RT.second(rform));
           rform = rform.next().next();
         }
+        //TODO move this somewhere else?
+        IPersistentMap classMeta = classname.meta() != null ? classname.meta() : PersistentHashMap.EMPTY;
+        classname = (Symbol)classname.withMeta(classMeta.assoc(loadNsKey, RT.get(RT.get(opts, Keyword.intern("opts")), loadNsKey)));
 
         ObjExpr ret = build((IPersistentVector) RT.get(opts, implementsKey,
             PersistentVector.EMPTY), fields, null, tagname, classname,
@@ -7289,7 +7293,7 @@ public class IconoclastCompiler implements Opcodes {
         ret.thisName = thisSym.name;
       }
       
-      ret.loadNs = RT.booleanCast(RT.get(ret.classMeta, Keyword.intern("load-ns")));
+      ret.loadNs = RT.booleanCast(RT.get(ret.classMeta,loadNsKey));
 
       if (fieldSyms != null) {
         IPersistentMap fmap = PersistentHashMap.EMPTY;
@@ -7617,8 +7621,9 @@ public class IconoclastCompiler implements Opcodes {
           ISeq form = (ISeq) RT.first(s);
           Symbol dotname = (Symbol) RT.first(form);
           Symbol name = (Symbol) Symbol.intern(null, munge(dotname.name)).withMeta(RT.meta(dotname));
+          boolean isDeclared = RT.booleanCast(RT.get(RT.meta(name), Keyword.intern("declare")));
 
-          if (RT.booleanCast(RT.get(RT.meta(name), Keyword.intern("defm")))) {
+          if (isDeclared) {
             IPersistentVector params = (IPersistentVector) RT.second(form);
             if (!ret.isStatic(dotname)) {
               if (params.count() == 0) {
@@ -8238,10 +8243,11 @@ public class IconoclastCompiler implements Opcodes {
       boolean isMethodStatic = objx.isStatic(dotname);
       boolean isMethodAbstract = objx.isAbstract(dotname);
 
-      boolean isMethodDeclared = (Boolean)RT.contains(RT.meta(name), Keyword.intern("defm")) && objx.isDefclass();
+      boolean isMethodDeclared = (Boolean)RT.contains(RT.meta(name), Keyword.intern("declare")) && objx.isDefclass();
+      boolean isMethodToBeInferred = (Boolean)RT.contains(RT.meta(name), Keyword.intern("infer")) && objx.isDefclass();
       boolean isMethodStaticBlock = (Boolean)RT.contains(RT.meta(name), Keyword.intern("static-init")) && objx.isDefclass();;
       isMethodStatic = isMethodStaticBlock ? isMethodStaticBlock : isMethodStatic;
-      isMethodDeclared =  isMethodStatic ? isMethodStatic : isMethodDeclared;
+      isMethodDeclared = isMethodStatic ? isMethodStatic : isMethodDeclared;
 
       if (isMethodDeclared && isMethodAbstract && ((objx.classAccess & Opcodes.ACC_ABSTRACT) == 0)) {
         throw new IllegalArgumentException("Cannot declare abstract method in a non-abstract class");
@@ -8312,59 +8318,67 @@ public class IconoclastCompiler implements Opcodes {
           psyms[i] = p;
         }
         if (!isMethodDeclared) {
-          Map matches = findMethodsWithNameAndArity(name.name, params.count(), overrideables);
-          Object mk = msig(name.name, pclasses);
-          java.lang.reflect.Method m = null;
-          if (matches.size() > 0) {
-            // multiple methods
-            if (matches.size() > 1) {
-              // must be hinted and match one method
-              if (!hinted)
-                throw new IllegalArgumentException(
-                    "Must hint overloaded method: " + name.name);
-              m = (java.lang.reflect.Method) matches.get(mk);
-              if (m == null)
-                throw new IllegalArgumentException(
-                    "Can't find matching overloaded method: " + name.name);
-              if (m.getReturnType() != method.retClass)
-                throw new IllegalArgumentException("Mismatched return type: "
-                    + name.name + ", expected: " + m.getReturnType().getName()
-                    + ", had: " + method.retClass.getName());
-            } else // one match
-            {
-              // if hinted, validate match,
-              if (hinted) {
+          try {
+            Map matches = findMethodsWithNameAndArity(name.name, params.count(), overrideables);
+            Object mk = msig(name.name, pclasses);
+            java.lang.reflect.Method m = null;
+            if (matches.size() > 0) {
+              // multiple methods
+              if (matches.size() > 1) {
+                // must be hinted and match one method
+                if (!hinted)
+                  throw new IllegalArgumentException(
+                          "Must hint overloaded method: " + name.name);
                 m = (java.lang.reflect.Method) matches.get(mk);
                 if (m == null)
                   throw new IllegalArgumentException(
-                      "Can't find matching method: " + name.name
-                          + ", leave off hints for auto match.");
-                // skip for declared
-                if (m.getReturnType() != method.retClass && !isMethodDeclared)
+                          "Can't find matching overloaded method: " + name.name);
+                if (m.getReturnType() != method.retClass)
                   throw new IllegalArgumentException("Mismatched return type: "
-                      + name.name + ", expected: " + m.getReturnType().getName()
-                      + ", had: " + method.retClass.getName());
-              } else // adopt found method sig
+                          + name.name + ", expected: " + m.getReturnType().getName()
+                          + ", had: " + method.retClass.getName());
+              } else // one match
               {
-                m = (java.lang.reflect.Method) matches.values().iterator().next();
-                method.retClass = m.getReturnType();
-                pclasses = m.getParameterTypes();
+                // if hinted, validate match,
+                if (hinted) {
+                  m = (java.lang.reflect.Method) matches.get(mk);
+                  if (m == null)
+                    throw new IllegalArgumentException(
+                            "Can't find matching method: " + name.name
+                                    + ", leave off hints for auto match.");
+                  // skip for declared
+                  if (m.getReturnType() != method.retClass)
+                    throw new IllegalArgumentException("Mismatched return type: "
+                            + name.name + ", expected: " + m.getReturnType().getName()
+                            + ", had: " + method.retClass.getName());
+                } else // adopt found method sig
+                {
+                  m = (java.lang.reflect.Method) matches.values().iterator().next();
+                  method.retClass = m.getReturnType();
+                  pclasses = m.getParameterTypes();
+                }
               }
             }
+            // else if(findMethodsWithName(name.name,allmethods).size()>0)
+            // throw new IllegalArgumentException("Can't override/overload method: "
+            // + name.name);
+            else {
+              throw new IllegalArgumentException("Can't define method not in interfaces: " + name.name);
+            }
+            // else
+            // validate unque name+arity among additional methods
+            method.retType = Type.getType(method.retClass);
+            method.exclasses = m.getExceptionTypes();
+          } catch (IllegalArgumentException e) {
+            if (!isMethodToBeInferred) throw e;
+            else {
+              // since we failed to match method with parent methods we will treat it as declared
+              isMethodDeclared = true;
+            }
           }
-          // else if(findMethodsWithName(name.name,allmethods).size()>0)
-          // throw new IllegalArgumentException("Can't override/overload method: "
-          // + name.name);
-          else {
-            throw new IllegalArgumentException("Can't define method not in interfaces: " + name.name);
-          }
-          // else
-          // validate unque name+arity among additional methods
-          method.retType = Type.getType(method.retClass);
-          method.exclasses = m.getExceptionTypes();
+        }
 
-        } else {
-
+        if (isMethodDeclared) {
           if (method.retClass != null) {
             method.retType = Type.getType(method.retClass);
           }
@@ -8406,8 +8420,7 @@ public class IconoclastCompiler implements Opcodes {
       }
     }
 
-    private static Map findMethodsWithNameAndArity(String name, int arity,
-        Map mm) {
+    private static Map findMethodsWithNameAndArity(String name, int arity, Map mm) {
       Map ret = new HashMap();
       for (Object o : mm.entrySet()) {
         Map.Entry e = (Map.Entry) o;

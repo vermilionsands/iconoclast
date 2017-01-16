@@ -5,12 +5,13 @@
 (defn- custom-eval [form]
   (IconoclastCompiler/eval form))
 
-(defn- emit-defclass* [tagname name fields interfaces methods]
+(defn- emit-defclass* [tagname name fields interfaces methods opts]
   (let [nsname (str (namespace-munge *ns*))
         classname (with-meta (symbol (str nsname "." name)) (meta name))]
      (custom-eval
        `(~(symbol "defclass*") ~tagname ~classname ~nsname ~fields
           :implements ~interfaces
+          :opts ~opts
           ~@methods))))
 
 (defn- accessor-name [prefix field-name]
@@ -19,13 +20,13 @@
 (defn- create-getter [field]
   (let [method-name (with-meta (accessor-name "get" (str field))
                                {:tag (or (:tag (meta field)) 'Object)
-                                :defm true})
+                                :declare true})
         this (symbol "this")]
     `(~method-name [~this] (. ~this ~(with-meta field nil)))))
 
 (defn- create-setter [field]
   (let [method-name (with-meta (accessor-name "set" (str field))
-                               {:tag 'void :defm true})
+                               {:tag 'void :declare true})
         arg (with-meta field {:tag (or (:tag (meta field)) 'Object)})
         this (symbol "this")]
     `(~method-name [~this ~arg] (set! (. ~this ~(with-meta field nil)) ~(with-meta arg nil)))))
@@ -44,15 +45,15 @@
                 setter (cons setter))))
      methods fields))
 
-(defn- ctor-meta [name classname [_ _ & [[head & rest]] :as ctor-form]]
+(defn- ctor-meta [name classname opts [_ _ & [[head & rest]] :as ctor-form]]
   (if (or (= head 'this!)
           (= head 'super!))
-    (apply list (assoc-in (vec ctor-form) [2] (apply list (cons head (map #(utils/update-method-meta name classname %) rest)))))
+    (apply list (assoc-in (vec ctor-form) [2] (apply list (cons head (map #(utils/update-method-meta name classname opts %) rest)))))
     ctor-form))
 
-(defn- expand-ctor [name classname fields ctor-form]
+(defn- expand-ctor [name classname fields opts ctor-form]
   (if (> (count ctor-form) 2)
-    (ctor-meta name classname ctor-form)
+    (ctor-meta name classname opts ctor-form)
     (let [[name [this & args]] ctor-form
            name->type (reduce
                         (fn [acc x] (assoc acc x (:tag (meta x))))
@@ -63,7 +64,7 @@
            body (map (fn [x] `(~(symbol "init-set!") ~(with-meta x nil) ~(with-meta x nil))) args)]
       (cons name (cons (vec (cons this args)) body)))))
 
-(defn- merge-init-with-ctors [name classname fields methods]
+(defn- merge-init-with-ctors [name classname fields opts methods]
   (let [[ctors inits methods] (reduce (fn [acc x]
                                        (let [m (meta (first x))
                                              k (cond
@@ -73,7 +74,7 @@
                                          (update-in acc [k] #(cons x %))))
                                [[] [] []] methods)
         _ (when (> (count inits) 1) (throw (AssertionError. "Only one instance init section is allowed")))
-        ctors (map (partial expand-ctor name classname fields) ctors)
+        ctors (map (partial expand-ctor name classname fields opts) ctors)
         init (first inits)]
     (if (empty? init)
       (reduce #(cons %2 %1) methods ctors)
@@ -118,7 +119,7 @@
 
   Methods:
 
-  Methods not in interfaces can be declared using :defm metadata
+  Methods not in interfaces can be declared using :declare metadata
   on methodname. Hint on methodname will define return type and
   hints on methodargs will define the types of the arguments.
 
@@ -153,7 +154,7 @@
   :static - makes method static. Static methods don't have the first
             parameter, that corresponds to the target object ('this')
   :abstract - makes method abstract
-  :defm - marks method as declared in this class
+  :declare - marks method as declared in this class
   :init - marks method as constructor
   :instance-init - marks method as instance init block
   :static-init - marks method as static init block
@@ -192,9 +193,9 @@
         _ (utils/validate-options opts)
         hinted-fields (utils/update-fields-meta name classname fields opts)
         methods (->> methods
-                     (merge-init-with-ctors name classname hinted-fields)
+                     (merge-init-with-ctors name classname hinted-fields opts)
                      (append-getters-setters hinted-fields))]
     `(do
-       ~(emit-defclass* name gname (vec hinted-fields) (vec interfaces) methods)
+       ~(emit-defclass* name gname (vec hinted-fields) (vec interfaces) methods opts)
         (import ~classname)
         ~classname)))
