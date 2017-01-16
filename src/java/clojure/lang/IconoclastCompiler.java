@@ -7410,15 +7410,6 @@ public class IconoclastCompiler implements Opcodes {
       Class stub = compileStub(slashname(superClass), ret, inames, methodForms, ctorForms, frm);
       Symbol thistag = Symbol.intern(null, stub.getName());
 
-      //gather methods once again for compiled stub
-      if (ret.isDefclass()) {
-        mc = gatherMethods(stub, RT.seq(interfaces));
-        overrideables = mc[0];
-        covariants = mc[1];
-        ret.mmap = overrideables;
-        ret.covariants = covariants;
-      }
-
       try {
         Var.pushThreadBindings(RT.mapUniqueKeys(CONSTANTS,
             PersistentVector.EMPTY, CONSTANT_IDS, new IdentityHashMap(),

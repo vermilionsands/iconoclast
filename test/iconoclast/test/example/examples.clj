@@ -299,12 +299,13 @@
   (^{Deprecated true} DeprecatedClass :- :init [this ^{Deprecated true} arg] nil)
   (^{Deprecated true} foo :- :declare [this ^{Deprecated true} arg] nil))
 
-(definterface InferSigInterface
+(interface/definterface InferSigInterface
   (foo [^String x]))
 
 (defclass InferMethodSig []
   :method-declaration-mode :infer
 
   InferSigInterface
-  (foo [thi x] x) ;; this should be inferref to (foo [^String])
-  (foo [this x :- int] x)) ;; this should be declared
+  (foo [this x] x) ;; this should be inferref to (foo [^String])
+  (foo [this x :- int] x) ;; this should be declared
+  (foo :- :declare [this x] x)) ;; this also should be declared
