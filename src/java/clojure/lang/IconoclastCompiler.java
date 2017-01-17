@@ -7551,26 +7551,10 @@ public class IconoclastCompiler implements Opcodes {
           Symbol dotname = (Symbol) RT.first(form);
           IPersistentVector params = (IPersistentVector) RT.second(form);
 
-          ISeq body = RT.third(form) != null ? RT.next(form).next() : null;
-          IPersistentVector superparams = null;
-          
-          if (body != null && body.first() != null && body.first() instanceof IPersistentList) {
-            IPersistentList l = (IPersistentList) body.first();
-            Object o = RT.first(l);
-            
-            if (o instanceof Symbol) {
-              Symbol superctor = (Symbol)o;
-              String supername = superctor.name;
-              if (superctor.equals(CTOR_SUPER) || superctor.equals(CTOR_THIS)){
-                superparams = PersistentVector.create(RT.next(l));
-              }
-            }
-          }
-
           if (params.count() == 0) {
             throw new IllegalArgumentException("Must supply at least one argument for 'this' in: " + dotname);
           }
-          Symbol thisName = (Symbol) params.nth(0);
+
           params = RT.subvec(params, 1, params.count());
 
           int ctorAccess = getCtorModifiersCodesSum(dotname);
