@@ -287,6 +287,9 @@
   ;but it will be in this one
   (getEOther [this other :- ChildClass] (.e other))
   (setEOther [this other :- ChildClass x] (set! (.e other) x))
+  ;handles should also work for current class
+  (getEOtherUsingHandle [this other :- ChildClass] (protected-get other e))
+  (setEOtherUsingHandle [this other :- ChildClass x] (protected-set! other e x))
 
   ;calling protected methods and fields from parent
   (protectedParentMethod [this x] (.protectedMethod this x))

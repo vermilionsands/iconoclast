@@ -365,6 +365,7 @@
       (is (= (.getF y) nil))
       (is (= (.getEOther y x) nil))
       (is (= (.getEOther y z) nil))
+      (is (= (.getEOtherUsingHandle y z) nil))
       ;set some value
       (.setA y "aa")
       (.setB y "bb")
@@ -386,7 +387,11 @@
       (is (= (.getE y) "EE"))
       (is (= (.getF y) "FF"))
       (is (= (.getEOther y x) "XEE"))
-      (is (= (.getEOther y z) "ZEE")))))
+      (is (= (.getEOther y z) "ZEE"))
+      (is (= (.getEOtherUsingHandle y z) "ZEE"))
+
+      (.setEOtherUsingHandle y z "CEE")
+      (is (= (.getEOtherUsingHandle y z) "CEE")))))
 
 (deftest annotations
   (testing "class annotations"

@@ -1,52 +1,72 @@
 (ns iconoclast.reflect
-  (:require [iconoclast.other.utils :refer [resolve-tag]]))
+  (:require [iconoclast.other.utils :refer [resolve-tag]])
+  (:import [java.lang NoSuchMethodException]
+           [java.lang.invoke MethodHandles MethodType]
+           [java.lang.reflect Field Method]
+           [java.util List]))
 
-(defmacro get-class-from-instance [use-parent? instance]
-  `[(class ~instance)
-    ~(if use-parent? `(first (bases (class ~instance)))
-                     `(class ~instance))])
+(defn get-class [instance use-parent?]
+  (if use-parent?
+    (first (bases (class instance)))
+    (class instance)))
+
+(defn get-handle-target-and-field
+  ([clazz field]
+   (get-handle-target-and-field clazz field clazz))
+  ([clazz field inital-class]
+   (let [field-type (try
+                      (.getType ^Field (.getDeclaredField ^Class clazz field))
+                      (catch Exception _ nil))]
+     (if field-type
+       [clazz field-type]
+       (let [parent (first (bases clazz))]
+         (if parent
+           (recur (first (bases clazz)) field inital-class)
+           (throw (IllegalArgumentException.
+                    (str "Cannot find field " field " in " inital-class " or it's ancestors")))))))))
 
 (defmacro protected-invoke [instance m & args]
   (let [tags (vec (map #(:tag (:meta %)) args))]
     `(let [clazz# (class ~instance)
            arg-types# (when (not-empty ~tags) (into-array Class (vec (map resolve-tag ~tags))))
            method# (try (.getDeclaredMethod ^Class clazz# ~(str m) arg-types#)
-                        (catch java.lang.NoSuchMethodException e#
+                        (catch NoSuchMethodException e#
                           (throw (IllegalArgumentException.
                                    (str "Cannot find method " ~(str m) " for class " clazz#
-                                     " with signature " (vec arg-types#) ". Consider using typehints")))))
-           return-type# (.getReturnType ^java.lang.reflect.Method method#)]
-        (if (empty? arg-types#)
-          (.invoke ^java.lang.reflect.Method method# ~instance)
-          (.invoke ^java.lang.reflect.Method method# ~instance (into-array Object (list ~@args)))))))
+                                     " with signature " (vec arg-types#) ". Consider using typehints")))))]
+           ;return-type# (.getReturnType ^Method method#)]
+       (if (empty? arg-types#)
+         (.invoke ^Method method# ~instance)
+         (.invoke ^Method method# ~instance (into-array Object (list ~@args)))))))
 
 (defmacro super-invoke [instance m & args]
   (let [tags (vec (map #(:tag (:meta %)) args))]
-    `(let [[clazz# parent#] (get-class-from-instance true ~instance)
+    `(let [clazz# (class ~instance)
+           target# (get-class ~instance true)
            arg-types# (when (not-empty ~tags) (into-array Class (vec (map resolve-tag ~tags))))
-           method# (try (.getDeclaredMethod ^Class parent# ~(str m) arg-types#)
-                        (catch java.lang.NoSuchMethodException e#
+           method# (try (.getDeclaredMethod ^Class target# ~(str m) arg-types#)
+                        (catch NoSuchMethodException e#
                           (throw (IllegalArgumentException.
-                                   (str "Cannot find method " ~(str m) " for class " parent#
+                                   (str "Cannot find method " ~(str m) " for class " target#
                                      " with signature " (vec arg-types#) ". Consider using typehints")))))
-           return-type# (.getReturnType ^java.lang.reflect.Method method#)
-           handle# (.findSpecial (java.lang.invoke.MethodHandles/lookup)
-                      parent#
+           return-type# (.getReturnType ^Method method#)
+           handle# (.findSpecial (MethodHandles/lookup)
+                     target#
                       ~(str m)
                       (if (empty? arg-types#)
-                        (java.lang.invoke.MethodType/methodType ^Class return-type#)
-                        (java.lang.invoke.MethodType/methodType ^Class return-type# ^{:tag "[Ljava.lang.Class;"} arg-types#))
+                        (MethodType/methodType ^Class return-type#)
+                        (MethodType/methodType ^Class return-type# ^{:tag "[Ljava.lang.Class;"} arg-types#))
                       clazz#)]
-      (.invokeWithArguments handle# ^java.util.List (list ~instance ~@args)))))
+       (.invokeWithArguments handle# ^List (list ~instance ~@args)))))
 
 (defmacro invoke-field-handle [use-parent? instance field & arg]
   (when (> (count arg) 1)
     (throw (AssertionError. "Supports only one optional argument")))
-  `(let [[clazz# parent#] (get-class-from-instance ~use-parent? ~instance)
-         field-type# (.getType ^java.lang.reflect.Field (.getDeclaredField ^Class parent# ~(str field)))
-         handle# (. (java.lang.invoke.MethodHandles/lookup) ~(if (empty? arg) 'findGetter 'findSetter)
-                   parent# ~(str field) field-type#)]
-     (.invokeWithArguments handle# ^java.util.List (list ~instance ~@arg))))
+  `(let [clazz# (get-class ~instance ~use-parent?)
+         [target# field-type#] (get-handle-target-and-field clazz# ~(str field))
+         handle# (. (MethodHandles/lookup) ~(if (empty? arg) 'findGetter 'findSetter)
+                    target# ~(str field) field-type#)]
+     (.invokeWithArguments handle# ^List (list ~instance ~@arg))))
 
 (defmacro protected-get [instance f]
   `(invoke-field-handle false ~instance ~f))
