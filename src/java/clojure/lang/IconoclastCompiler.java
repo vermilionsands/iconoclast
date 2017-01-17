@@ -7611,7 +7611,6 @@ public class IconoclastCompiler implements Opcodes {
 
             Type[] argTypes = new Type[params.count()];
 
-            boolean paramHinted = false;
             for (int i = 0; i < params.count(); i++) {
               if (!(params.nth(i) instanceof Symbol)) {
                 throw new IllegalArgumentException("params must be Symbols");
@@ -7893,9 +7892,6 @@ public class IconoclastCompiler implements Opcodes {
 
     boolean useThisAsSuperCtor;
 
-    static Keyword bodyKey = Keyword.intern(null, "body");
-    static Keyword fieldKey = Keyword.intern(null, "field");
-
     public NewCtor(ObjExpr objx, ObjMethod parent) {
       super(objx, parent);
     }
@@ -8059,8 +8055,6 @@ public class IconoclastCompiler implements Opcodes {
         }
       } catch (NoSuchMethodException e) {
         throw new IllegalArgumentException("Cannot find accessible super ctor for class: " + superClass.getName() + " and types " + tv);
-      } catch (Exception e) {
-        //nothing
       }
 
       try {
