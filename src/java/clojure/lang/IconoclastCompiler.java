@@ -1187,8 +1187,7 @@ public class IconoclastCompiler implements Opcodes {
       java.lang.reflect.Field f = targetClass != null ? Reflector.getField(targetClass, fieldName, false) : null;
 
       String owner = (String)DEFINING_CLASS.deref();
-      if (f == null && owner!= null && targetClass != null
-          && (targetClass.getName().equals(owner) || destubClassName(targetClass.getName()).equals(owner))) {
+      if (f == null && owner!= null && targetClass != null && destubClassName(targetClass.getName()).equals(owner)) {
         this.field = IconoclastReflector.getField(targetClass, fieldName, false, true, true);
       } else {
         this.field = f;
@@ -1319,8 +1318,7 @@ public class IconoclastCompiler implements Opcodes {
           //TODO
           Class ownerClass = RT.classForName(COMPILE_STUB_PREFIX + "." + owner);
 
-          if (c.getName().equals(owner)
-              || destubClassName(c.getName()).equals(owner)) {
+          if (destubClassName(c.getName()).equals(owner)) {
             f = IconoclastReflector.getField(c, fieldName, true, true, true);
           } else if (c.isAssignableFrom(ownerClass)) {
             f = IconoclastReflector.getField(c, fieldName, true, true, false);
@@ -1506,7 +1504,7 @@ public class IconoclastCompiler implements Opcodes {
 
         if (methods.isEmpty() && DEFINING_CLASS.deref() != null) {
           String owner = (String)DEFINING_CLASS.deref();
-          if (target.getJavaClass().getName().equals(owner) || destubClassName(target.getJavaClass().getName()).equals(owner)) {
+          if (destubClassName(target.getJavaClass().getName()).equals(owner)) {
             methods = IconoclastReflector.getMethods(target.getJavaClass(), args.count(), methodName, false, true, true);
           }
         }
@@ -1691,7 +1689,7 @@ public class IconoclastCompiler implements Opcodes {
         //TODO
         Class ownerClass = RT.classForName(COMPILE_STUB_PREFIX + "." + owner);
 
-        if (c.getName().equals(owner) || destubClassName(c.getName()).equals(owner)) {
+        if (destubClassName(c.getName()).equals(owner)) {
           methods = IconoclastReflector.getMethods(c, args.count(), methodName, true, true, true);
         } else if (c.isAssignableFrom(ownerClass)) {
             //|| ownerClass.isAssignableFrom(c)) { //won't happen now
@@ -6690,7 +6688,7 @@ public class IconoclastCompiler implements Opcodes {
               String owner = (String)DEFINING_CLASS.deref();
               //TODO refactor
               Class ownerClass = RT.classForName(COMPILE_STUB_PREFIX + "." + owner);
-              if (((c.getName().equals(owner) || destubClassName(c.getName()).equals(owner))
+              if ((destubClassName(c.getName()).equals(owner)
                      && IconoclastReflector.getField(c, sym.name, true, true, true) != null)
                   || (c.isAssignableFrom(ownerClass)
                       && IconoclastReflector.getField(c, sym.name, true, true, false) != null)) {
@@ -7937,6 +7935,7 @@ public class IconoclastCompiler implements Opcodes {
       //gen.visitCode();
       //Label loopLabel = gen.mark();
       //gen.visitLineNumber(line, loopLabel);
+
       try {
         Var.pushThreadBindings(RT.map(LOOP_LABEL, loopLabel, METHOD, this, DEFINING_CLASS, objx.name, FIELD_ASSIGNMENTS, PersistentHashMap.EMPTY));
 
