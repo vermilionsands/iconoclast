@@ -311,6 +311,16 @@
   :method-declaration-mode :infer
 
   InferSigInterface
-  (foo [this x] x) ;; this should be inferref to (foo [^String])
+  (foo [this x] x) ;; this should be inferred to (foo [^String])
   (foo [this x :- int] x) ;; this should be declared
   (foo :- :declare [this x] x)) ;; this also should be declared
+
+(defclass CustomException []
+  RuntimeException
+  (CustomException :- :init [this x :- String] (super! x)))
+
+(defclass ClassWithExceptions []
+  (ClassWithExceptions :- [:init {:throws [NullPointerException]}] [this])
+  (foo :- [:declare {:throws [NullPointerException]}] [this x] x)
+  (bar :- [:declare {:throws [CustomException NullPointerException]}]
+    [this x] x))

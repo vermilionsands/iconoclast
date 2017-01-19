@@ -7922,7 +7922,15 @@ public class IconoclastCompiler implements Opcodes {
     public void emit(ObjExpr obj, ClassVisitor cv) {
 
       Method m = new Method("<init>", Type.VOID_TYPE, ctorTypes);
-      GeneratorAdapter gen = new GeneratorAdapter(accessModifiers, m, null, null, cv);
+
+      Type[] extypes = null;
+      if (exclasses.length > 0) {
+        extypes = new Type[exclasses.length];
+        for (int i = 0; i < exclasses.length; i++)
+          extypes[i] = Type.getType(exclasses[i]);
+      }
+
+      GeneratorAdapter gen = new GeneratorAdapter(accessModifiers, m, null, extypes, cv);
       addAnnotation(gen, methodMeta);
       for (int i = 0; i < params.count(); i++) {
         IPersistentMap meta = RT.meta(params.nth(i));
@@ -8124,6 +8132,14 @@ public class IconoclastCompiler implements Opcodes {
           }
         }
 
+        IPersistentVector exceptions = (IPersistentVector)RT.get(RT.meta(name), Keyword.intern("throws"));
+        Class[] exclasses = new Class[exceptions != null ? exceptions.count() : 0];
+        for (int i = 0; i < exclasses.length; i++) {
+          Symbol e = (Symbol) exceptions.nth(i);
+          Class eclass = tagClass(e);
+          exclasses[i] = eclass;
+        }
+
         LOOP_LOCALS.set(argLocals);
 
         ctor.useThisAsSuperCtor = useThisAsSuperCtor;
@@ -8136,6 +8152,7 @@ public class IconoclastCompiler implements Opcodes {
         ctor.methodMeta = RT.meta(name);
         ctor.argLocals = argLocals;
         ctor.body = (new BodyExpr.Parser()).parse(C.RETURN, body);
+        ctor.exclasses = exclasses;
         
         //superparam exprs
         Expr[] superParamExprs = new Expr[superparams.count()];
@@ -8219,7 +8236,6 @@ public class IconoclastCompiler implements Opcodes {
       IPersistentVector params = (IPersistentVector) RT.second(form);
       boolean isMethodStatic = objx.isStatic(dotname);
       boolean isMethodAbstract = objx.isAbstract(dotname);
-
       boolean isMethodDeclared = (Boolean)RT.contains(RT.meta(name), Keyword.intern("declare")) && objx.isDefclass();
       boolean isMethodToBeInferred = (Boolean)RT.contains(RT.meta(name), Keyword.intern("infer")) && objx.isDefclass();
       boolean isMethodStaticBlock = (Boolean)RT.contains(RT.meta(name), Keyword.intern("static-init")) && objx.isDefclass();;
@@ -8359,8 +8375,15 @@ public class IconoclastCompiler implements Opcodes {
           if (method.retClass != null) {
             method.retType = Type.getType(method.retClass);
           }
-          //TODO add support for exceptions
-          method.exclasses = new Class[0];
+          IPersistentVector exceptions = (IPersistentVector)RT.get(RT.meta(name), Keyword.intern("throws"));
+          Class[] exclasses = new Class[exceptions != null ? exceptions.count() : 0];
+          for (int i = 0; i < exclasses.length; i++) {
+            Symbol e = (Symbol) exceptions.nth(i);
+            Class eclass = tagClass(e);
+            exclasses[i] = eclass;
+          }
+          method.exclasses = exclasses;
+
         }
 
         for (int i = 0; i < params.count(); i++) {
