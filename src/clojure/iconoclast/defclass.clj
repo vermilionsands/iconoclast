@@ -21,17 +21,17 @@
   (let [method-name (with-meta (accessor-name "get" (str field))
                                {:tag (or (:tag (meta field)) 'Object)
                                 :declare true})
-        this (symbol "this")]
+        this 'this]
     `(~method-name [~this] (. ~this ~(with-meta field nil)))))
 
-(defn- create-setter [field]
+(defn- create-setter [field return-type]
   (let [method-name (with-meta (accessor-name "set" (str field))
-                               {:tag 'void :declare true})
+                               {:tag return-type :declare true})
         arg (with-meta field {:tag (or (:tag (meta field)) 'Object)})
-        this (symbol "this")]
-    `(~method-name [~this ~arg] (set! (. ~this ~(with-meta field nil)) ~(with-meta arg nil)))))
+        this 'this]
+    `(~method-name [~this ~arg] (set! (. ~this ~(with-meta field nil)) ~(with-meta arg nil)) ~this)))
 
-(defn- append-getters-setters [fields methods]
+(defn- append-getters-setters [fields return-type methods]
   (when (some #(let [m (meta %)]
                   (and (:static m)
                        (or (:get m) (:set m))))
@@ -39,7 +39,7 @@
     (throw (AssertionError. (str "Getters and setters can be generated only for instance fields"))))
   (reduce (fn [acc x]
             (let [getter (when (:get (meta x)) (create-getter x))
-                  setter (when (:set (meta x)) (create-setter x))]
+                  setter (when (:set (meta x)) (create-setter x return-type))]
               (cond->> acc
                 getter (cons getter)
                 setter (cons setter))))
@@ -194,7 +194,7 @@
         hinted-fields (utils/update-fields-meta name classname fields opts)
         methods (->> methods
                      (merge-init-with-ctors name classname hinted-fields opts)
-                     (append-getters-setters hinted-fields))]
+                     (append-getters-setters hinted-fields classname))]
     `(do
        ~(emit-defclass* name gname (vec hinted-fields) (vec interfaces) methods opts)
         (import ~classname)

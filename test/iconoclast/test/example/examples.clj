@@ -154,7 +154,9 @@
   (staticCallFoo :- :static [] (foo))
   (staticCallBar :- :static [x y] (bar x y))
   (callCallFoo :- :static [x :- SampleClass] (.callFoo x))
-  (callCallBar :- :static [x :- SampleClass y z] (.callBar x y z)))
+  (callCallBar :- :static [x :- SampleClass y z] (.callBar x y z))
+
+  (getSelf :- SampleClass [this] this))
 
 (defclass NonPublicFieldsClass [aProtected :- [:final :protected]
                                 ;private mutable field with automatically generated setter and getter

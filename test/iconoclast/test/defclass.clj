@@ -195,7 +195,7 @@
     (let [f (partial i/get-method-return-class NonPublicFieldsClass)
           g (partial i/get-method-modifier NonPublicFieldsClass)]
         (is (= (f "getDPrivateArr" nil) (i/array NonPublicFieldsClass)))
-        (is (= (f "setDPrivateArr" (i/sig (i/array NonPublicFieldsClass))) (Void/TYPE)))
+        (is (= (f "setDPrivateArr" (i/sig (i/array NonPublicFieldsClass))) NonPublicFieldsClass))
         (is (not= (g "getDPrivateArr" nil Modifier/PUBLIC) 0))
         (is (not= (g "setDPrivateArr" (i/sig (i/array NonPublicFieldsClass)) Modifier/PUBLIC) 0))))
   (testing "setters and getters usage"
