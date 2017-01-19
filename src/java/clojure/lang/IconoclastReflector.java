@@ -29,7 +29,7 @@ public class IconoclastReflector {
 
   static public Field getField(Class c, String name, boolean getStatics,
       boolean includeProtected, boolean includePrivate) {
-    Field[] allfields = null;
+    Field[] allfields;
     if (!includeProtected && !includePrivate) {
       allfields = c.getFields();
     } else {
@@ -81,13 +81,6 @@ public class IconoclastReflector {
 
         }
       }
-      // && (!method.isBridge()
-      // || (c == StringBuilder.class &&
-      // c.getMethod(method.getName(), method.getParameterTypes())
-      // .equals(method))))
-      // {
-      // methods.add(allmethods[i]);
-      // }
     }
 
     if (methods.isEmpty()) {
@@ -113,9 +106,15 @@ public class IconoclastReflector {
   }
 
   public static boolean isAncestorClass(Class ancestor, Class descendant) {
-    if (descendant.equals(Object.class)) return false;
+    if (descendant.equals(Object.class)) {
+      return false;
+    }
+
     Class superClass = descendant.getSuperclass();
-    if (superClass.equals(ancestor)) return true;
+    if (superClass.equals(ancestor)) {
+      return true;
+    }
+
     return isAncestorClass(ancestor, superClass);
   }
 
