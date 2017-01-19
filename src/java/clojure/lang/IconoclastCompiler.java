@@ -1186,9 +1186,18 @@ public class IconoclastCompiler implements Opcodes {
 
       java.lang.reflect.Field f = targetClass != null ? Reflector.getField(targetClass, fieldName, false) : null;
 
-      String owner = (String)DEFINING_CLASS.deref();
-      if (f == null && owner!= null && targetClass != null && destubClassName(targetClass.getName()).equals(owner)) {
-        this.field = IconoclastReflector.getField(targetClass, fieldName, false, true, true);
+      String owner = (String) DEFINING_CLASS.deref();
+      //Class ownerClass = RT.classForName(COMPILE_STUB_PREFIX + "." + owner);
+      if (f == null && owner != null && targetClass != null) {
+        if (destubClassName(targetClass.getName()).equals(owner)) {
+          this.field = IconoclastReflector.getField(targetClass, fieldName, false, true, true);
+        // this won't work! possible (?) explanation:
+        // https://coderanch.com/t/328067/java/VerifyError-Bad-access-protected-data
+        //} else if (IconoclastReflector.isAncestorClass(targetClass, ownerClass)) {
+        //  this.field = IconoclastReflector.getField(targetClass, fieldName, false, true, false);
+        } else {
+          this.field = f;
+        }
       } else {
         this.field = f;
       }

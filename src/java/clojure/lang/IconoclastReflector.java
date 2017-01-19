@@ -19,6 +19,7 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 
 public class IconoclastReflector {
 
@@ -109,6 +110,13 @@ public class IconoclastReflector {
     }
 
     return methods;
+  }
+
+  public static boolean isAncestorClass(Class ancestor, Class descendant) {
+    if (descendant.equals(Object.class)) return false;
+    Class superClass = descendant.getSuperclass();
+    if (superClass.equals(ancestor)) return true;
+    return isAncestorClass(ancestor, superClass);
   }
 
 }
