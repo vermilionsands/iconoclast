@@ -82,6 +82,7 @@ public class IconoclastCompiler implements Opcodes {
   static final Keyword onKey = Keyword.intern(null, "on");
   static Keyword dynamicKey = Keyword.intern("dynamic");
   static final Keyword loadNsKey = Keyword.intern("load-ns");
+  static final Keyword throwsKey = Keyword.intern("throws");
 
   //access keywords
   public static final Keyword ACCESS_PUBLIC_FLAG = Keyword.intern(null, "public");
@@ -90,6 +91,7 @@ public class IconoclastCompiler implements Opcodes {
   public static final Keyword ACCESS_PRIVATE_FLAG = Keyword.intern(null, "private");
   public static final Keyword ACCESS_PROTECTED_FLAG = Keyword.intern(null, "protected");
   public static final Keyword ACCESS_ABSTRACT_FLAG = Keyword.intern(null, "abstract");
+  public static final Keyword ACCESS_INTERFACE_FLAG = Keyword.intern(null, "interface");
   public static final Keyword ACCESS_STATIC_FLAG = Keyword.intern(null, "static");
   public static final Keyword ACCESS_TRANSIENT_FLAG = Keyword.intern(null, "transient");
   public static final Keyword ACCESS_SYNCHRONIZED_FLAG = Keyword.intern(null, "synchronized");
@@ -3995,6 +3997,7 @@ public class IconoclastCompiler implements Opcodes {
     boolean skipDefaultCtors;
     boolean skipDefaultStaticBlock;
     boolean loadNs;
+    boolean isInterface;
 
     public final String name() {
       return name;
@@ -7301,6 +7304,7 @@ public class IconoclastCompiler implements Opcodes {
       }
       
       ret.loadNs = RT.booleanCast(RT.get(ret.classMeta,loadNsKey));
+      ret.isInterface = ret.isDefclass() && RT.booleanCast(RT.get(ret.classMeta, ACCESS_INTERFACE_FLAG));
 
       if (fieldSyms != null) {
         IPersistentMap fmap = PersistentHashMap.EMPTY;
@@ -7364,7 +7368,7 @@ public class IconoclastCompiler implements Opcodes {
 
         methodForms = methods.seq();
         ctorForms = ctors.seq();
-        ret.skipDefaultCtors = ctors.count() != 0;
+        ret.skipDefaultCtors = (ctors.count() != 0) || ret.isInterface;
         ret.skipDefaultStaticBlock = ret.staticInit != null;
       }
 
@@ -8132,7 +8136,7 @@ public class IconoclastCompiler implements Opcodes {
           }
         }
 
-        IPersistentVector exceptions = (IPersistentVector)RT.get(RT.meta(name), Keyword.intern("throws"));
+        IPersistentVector exceptions = (IPersistentVector)RT.get(RT.meta(name), throwsKey);
         Class[] exclasses = new Class[exceptions != null ? exceptions.count() : 0];
         for (int i = 0; i < exclasses.length; i++) {
           Symbol e = (Symbol) exceptions.nth(i);
@@ -8375,7 +8379,7 @@ public class IconoclastCompiler implements Opcodes {
           if (method.retClass != null) {
             method.retType = Type.getType(method.retClass);
           }
-          IPersistentVector exceptions = (IPersistentVector)RT.get(RT.meta(name), Keyword.intern("throws"));
+          IPersistentVector exceptions = (IPersistentVector)RT.get(RT.meta(name), throwsKey);
           Class[] exclasses = new Class[exceptions != null ? exceptions.count() : 0];
           for (int i = 0; i < exclasses.length; i++) {
             Symbol e = (Symbol) exceptions.nth(i);
@@ -8946,15 +8950,27 @@ public class IconoclastCompiler implements Opcodes {
       if (m.containsKey(ACCESS_ABSTRACT_FLAG)) {
         opcodes += Opcodes.ACC_ABSTRACT;
       }
+
+      if (m.containsKey(ACCESS_INTERFACE_FLAG)) {
+        opcodes += Opcodes.ACC_INTERFACE;
+        opcodes += Opcodes.ACC_ABSTRACT;
+      }
+
       if (!m.containsKey(ACCESS_NONFINAL_FLAG)) {
         opcodes += Opcodes.ACC_FINAL;
+      }
+
+      if ((Opcodes.ACC_INTERFACE & opcodes) > 0 && ((Opcodes.ACC_FINAL & opcodes) > 0)) {
+        throw new IllegalArgumentException("Cannot create final interface!");
       }
 
       if ((Opcodes.ACC_ABSTRACT & opcodes) > 0 && (Opcodes.ACC_FINAL & opcodes) > 0) {
         throw new IllegalArgumentException("Cannot create final abstract class!");
       }
 
-      opcodes += ACC_SUPER;
+      if ((Opcodes.ACC_INTERFACE & opcodes) == 0) {
+        opcodes += ACC_SUPER;
+      }
     } else {
       //defaults
       opcodes = ACC_PUBLIC + ACC_SUPER + ACC_FINAL;
