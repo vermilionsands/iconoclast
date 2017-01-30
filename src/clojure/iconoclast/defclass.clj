@@ -5,11 +5,11 @@
 (defn- custom-eval [form]
   (IconoclastCompiler/eval form))
 
-(defn- emit-defclass* [tagname name fields interfaces methods opts]
+(defn- emit-defclass* [name fields interfaces methods opts]
   (let [nsname (str (namespace-munge *ns*))
         classname (with-meta (symbol (str nsname "." name)) (meta name))]
      (custom-eval
-       `(~(symbol "defclass*") ~tagname ~classname ~nsname ~fields
+       `(~(symbol "defclass*") ~name ~classname ~nsname ~fields
           :implements ~interfaces
           :opts ~opts
           ~@methods))))
@@ -186,9 +186,7 @@
   No factory functions will be defined."
   (let [[name fields & opts+specs] (utils/merge-schema-with-meta class-spec)
         _ (utils/validate-fields fields name)
-        gname name
-        ns-part (namespace-munge *ns*)
-        classname (symbol (str ns-part "." gname))
+        classname (symbol (str (namespace-munge *ns*) "." name))
         [interfaces methods opts] (utils/parse-opts+specs opts+specs name classname)
         _ (utils/validate-options opts)
         hinted-fields (utils/update-fields-meta name classname fields opts)
@@ -196,6 +194,6 @@
                      (merge-init-with-ctors name classname hinted-fields opts)
                      (append-getters-setters hinted-fields classname))]
     `(do
-       ~(emit-defclass* name gname (vec hinted-fields) (vec interfaces) methods opts)
+       ~(emit-defclass* name (vec hinted-fields) (vec interfaces) methods opts)
         (import ~classname)
         ~classname)))
