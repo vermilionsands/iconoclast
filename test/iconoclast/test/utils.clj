@@ -28,9 +28,8 @@
 
 (deftest meta-self-hint-test
   (testing "Conversion of tag value"
-    (let [classname (symbol "Foo")
-          ns+classname (symbol "bar.Foo")
-          f (partial meta-self-hint classname ns+classname)
+    (let [classname (symbol "bar.Foo")
+          f (partial meta-self-hint classname)
           m1 (f {:tag (symbol "Wee")})
           m2 (f {:tag (symbol "Foo")})]
       (is (= (:tag m1) (symbol "Wee")))
@@ -38,8 +37,8 @@
 
 (deftest meta-arr-to-hint-test
   (testing "Conversion of array and tag meta"
-    (let [ns+classname (symbol "bar.Zoo")
-          f (partial meta-arr-to-hint ns+classname)
+    (let [classname (symbol "bar.Zoo")
+          f (partial meta-arr-to-hint classname)
           m1 (f {:tag String})
           m2 (f {:array true})
           m3 (f {:array 2})

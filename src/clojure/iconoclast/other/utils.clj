@@ -10,7 +10,8 @@
 ;   vermilionsands 2015
 
 (ns iconoclast.other.utils
-  (:require [iconoclast.other.schema :as schema]))
+  (:require [clojure.string :as string]
+            [iconoclast.other.schema :as schema]))
 
 (def hardcoded-classes
   (let [f (fn [c] (.getClass (make-array c 0)))]
@@ -69,7 +70,7 @@
      (throw (IllegalArgumentException. "Array dimension cannot be lower than 1")))
    (.getClass (apply make-array type (repeat d 0)))))
 
-(defn meta-arr-to-hint [ns+classname m]
+(defn meta-arr-to-hint [classname m]
   (let [d (:array m)
         d (if (number? d)
             d
@@ -78,7 +79,7 @@
     (if-not (or (nil? d))
       (assoc m :tag
         (symbol
-          (if (= t ns+classname)
+          (if (= t classname)
             (str (apply str (repeat d "[")) "L" t ";")
             (.getName (get-array-type (resolve-tag t) d)))))
       m)))
@@ -88,8 +89,9 @@
     (-> m (dissoc :mutable) (assoc :unsynchronized-mutable true))
     m))
 
-(defn meta-self-hint [name classname m]
-  (let [t (:tag m)]
+(defn meta-self-hint [classname m]
+  (let [name (symbol (last (string/split (name classname) #"\.")))
+        t (:tag m)]
     (if (and (not (nil? t)) (= name t))
       (assoc m :tag classname)
       m)))
@@ -99,21 +101,21 @@
     m
     (assoc m k true)))
 
-(defn update-fields-meta [classname ns+classname fields {:keys [fields-mutability fields-visibility]}]
+(defn update-fields-meta [classname fields {:keys [fields-mutability fields-visibility]}]
   (mapv (fn [x]
           (with-meta x (->> (meta x)
                             (meta-add-default-option field-mutability-keys fields-mutability)
                             (meta-add-default-option field-visibility-keys fields-visibility)
                             (meta-mutable-to-unsynchronized)
-                            (meta-self-hint classname ns+classname)
-                            (meta-arr-to-hint ns+classname))))
+                            (meta-self-hint classname)
+                            (meta-arr-to-hint classname))))
     fields))
 
-(defn update-method-meta [classname ns+classname {:keys [method-declaration-mode]} sym]
+(defn update-method-meta [classname {:keys [method-declaration-mode]} sym]
   (with-meta sym (->> (meta sym)
                       (meta-add-default-option method-declaration-mode-keys method-declaration-mode)
-                      (meta-self-hint classname ns+classname)
-                      (meta-arr-to-hint ns+classname))))
+                      (meta-self-hint classname)
+                      (meta-arr-to-hint classname))))
 
 (defn- maybe-destructured
   [params body]
@@ -166,7 +168,7 @@
              (drop-while seq? (next s)))
       ret)))
 
-(defn parse-opts+specs [opts+specs classname ns+classname]
+(defn parse-opts+specs [opts+specs classname]
   (let [[opts specs] (parse-opts opts+specs)
         impls (parse-impls specs)
         interfaces (-> (map #(if (var? (resolve %))
@@ -176,7 +178,7 @@
                        set
                        (disj 'Object 'java.lang.Object 'not-in-interface)
                        vec)
-        methods (let [f (fn [x] (update-method-meta classname ns+classname opts x))]
+        methods (let [f (fn [x] (update-method-meta classname opts x))]
                   (->>
                     (apply concat (vals impls))
                     (map (fn [[name params & body]]

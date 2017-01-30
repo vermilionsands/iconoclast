@@ -3,15 +3,15 @@
   (:require [iconoclast.other.utils :as utils]))
 
 (defn- get-interface-tag
-  [classname ns+classname sym]
+  [classname sym]
   (let [default-tag (fn [x] (if (:tag x) x (assoc x :tag 'Object)))]
     (:tag (->> (meta sym) default-tag
-                          (utils/meta-self-hint classname ns+classname)
-                          (utils/meta-arr-to-hint ns+classname)))))
+                          (utils/meta-self-hint classname)
+                          (utils/meta-arr-to-hint classname)))))
 
 (defmacro definterface [name & sigs]
   (let [cname (with-meta (symbol (str (namespace-munge *ns*) "." name)) (meta name))
-        tag (partial get-interface-tag name cname)
+        tag (partial get-interface-tag cname)
         psig (fn [[name [& args]]]
                (vector name (vec (map tag args)) (tag name) (map meta args)))]
     `(let []

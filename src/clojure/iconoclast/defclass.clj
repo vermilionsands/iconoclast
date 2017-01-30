@@ -1,5 +1,6 @@
 (ns iconoclast.defclass
-  (:require [iconoclast.other.utils :as utils])
+  (:require [iconoclast.other.utils :as utils]
+            [clojure.string :as string])
   (:import [clojure.lang IconoclastCompiler]))
 
 (defn- custom-eval [form]
@@ -45,15 +46,15 @@
                 setter (cons setter))))
      methods fields))
 
-(defn- ctor-meta [name classname opts [_ _ & [[head & rest]] :as ctor-form]]
+(defn- ctor-meta [classname opts [_ _ & [[head & rest]] :as ctor-form]]
   (if (or (= head 'this!)
           (= head 'super!))
-    (apply list (assoc-in (vec ctor-form) [2] (apply list (cons head (map #(utils/update-method-meta name classname opts %) rest)))))
+    (apply list (assoc-in (vec ctor-form) [2] (apply list (cons head (map #(utils/update-method-meta classname opts %) rest)))))
     ctor-form))
 
-(defn- expand-ctor [name classname fields opts ctor-form]
+(defn- expand-ctor [classname fields opts ctor-form]
   (if (> (count ctor-form) 2)
-    (ctor-meta name classname opts ctor-form)
+    (ctor-meta classname opts ctor-form)
     (let [[name [this & args]] ctor-form
            name->type (reduce
                         (fn [acc x] (assoc acc x (:tag (meta x))))
@@ -64,7 +65,7 @@
            body (map (fn [x] `(~(symbol "init-set!") ~(with-meta x nil) ~(with-meta x nil))) args)]
       (cons name (cons (vec (cons this args)) body)))))
 
-(defn- merge-init-with-ctors [name classname fields opts methods]
+(defn- merge-init-with-ctors [classname fields opts methods]
   (let [[ctors inits methods] (reduce (fn [acc x]
                                        (let [m (meta (first x))
                                              k (cond
@@ -74,11 +75,12 @@
                                          (update-in acc [k] #(cons x %))))
                                [[] [] []] methods)
         _ (when (> (count inits) 1) (throw (AssertionError. "Only one instance init section is allowed")))
-        ctors (map (partial expand-ctor name classname fields opts) ctors)
+        ctors (map (partial expand-ctor classname fields opts) ctors)
         init (first inits)]
     (if (empty? init)
       (reduce #(cons %2 %1) methods ctors)
-      (let [init-this (-> init second first)
+      (let [name (symbol (last (string/split (name classname) #"\.")))
+            init-this (-> init second first)
             init-logic (drop 2 init)
             blank-ctor (list (with-meta name {:init true}) [init-this] nil)
             ctors (map (fn [x]
@@ -92,6 +94,11 @@
                             (apply concat [head init-logic tail])))
                     (if-not (empty? ctors) ctors (cons blank-ctor ctors)))]
         (reduce #(cons %2 %1) methods ctors)))))
+
+(defn update-methods [methods classname hinted-fields opts]
+  (->> methods
+       (merge-init-with-ctors classname hinted-fields opts)
+       (append-getters-setters hinted-fields classname)))
 
 (defmacro defclass [& class-spec]
   "See deftype documentation.
@@ -185,14 +192,12 @@
 
   No factory functions will be defined."
   (let [[name fields & opts+specs] (utils/merge-schema-with-meta class-spec)
-        _ (utils/validate-fields fields name)
         classname (symbol (str (namespace-munge *ns*) "." name))
-        [interfaces methods opts] (utils/parse-opts+specs opts+specs name classname)
+        [interfaces methods opts] (utils/parse-opts+specs opts+specs classname)
+        _ (utils/validate-fields fields name)
         _ (utils/validate-options opts)
-        hinted-fields (utils/update-fields-meta name classname fields opts)
-        methods (->> methods
-                     (merge-init-with-ctors name classname hinted-fields opts)
-                     (append-getters-setters hinted-fields classname))]
+        hinted-fields (utils/update-fields-meta classname fields opts)
+        methods (update-methods methods classname hinted-fields opts)]
     `(do
        ~(emit-defclass* name (vec hinted-fields) (vec interfaces) methods opts)
         (import ~classname)
