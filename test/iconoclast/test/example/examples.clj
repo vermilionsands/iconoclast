@@ -1,35 +1,54 @@
 (ns iconoclast.test.example.examples
-  (:require [iconoclast.defclass :refer :all]
-            [iconoclast.reflect :refer :all]
-            [iconoclast.definterface :as interface]))
+  (:require [iconoclast.defclass :as c]
+            [iconoclast.reflect :as r]))
 
 (defn foo [] "foo")
 (defn bar [x y] (str "bar " x " " y))
 
-(interface/definterface SampleInterface
-  (objectMethod [x])
-  (^int intMethod [^int x])
-  (^String stringMethod [^String x])
-  (^SampleInterface selftypeMethod [^SampleInterface x])
-  (^{:array 1} objectArrayMethod [^{:array 1} x])
-  (^{:array 1} ^ints intArrayMethod [^{:array 2} ^int x])
-  (^{:array 3} ^String stringArrayMethod [^{:array 3} ^String x])
-  (^:array ^SampleInterface selftypeArrayMethod [^:array ^SampleInterface x])
+(c/definterface SampleInterface
+  (objectMethod [_ x])
+
+  (intMethod :- int
+    [_ x :- int])
+
+  (stringMethod :- String
+    [_ x :- String])
+
+  (selftypeMethod :- SampleInterface
+    [_ x :- SampleInterface])
+
+  (objectArrayMethod :- {:array 1}
+    [_ x :- {:array 1}])
+
+  (intArrayMethod :- [{:array 1} ints]
+    [_ x :- [{:array 2} int]])
+
+  (stringArrayMethod :- [{:array 3} String]
+    [_ x :- [{:array 3} String]])
+
+  (selftypeArrayMethod :- [:array SampleInterface]
+    [_ x :- [:array SampleInterface]])
+
   ;not yet, this would require a small change in gen-class
   ;(^:varargs varargsMethod [^:array x])
   ;(^:varargs intVarargsMethod [^ints x])
   ;(^:varargs stringVarargsMethod [^{:array 2} ^String x])
   ;(^:varargs selftypeVarargsMethod [^:array ^SampleInterface x])
-  (^void voidMethod []))
+  (voidMethod :- void [_]))
 
-(defclass AbstractSampleClass :- [:abstract :nonfinal]
+(c/definterface AnotherInterface
+  (objectMethod [_ x])
+  (intMethod    :- int [_ x :- int])
+  (voidMethod   :- void [_ x]))
+
+(c/defclass AbstractSampleClass :- [:abstract :nonfinal]
   [x y]
   SampleInterface
   (abstractMethod :- [:declare :abstract] [this])
   (concreteMethod :- [:declare] [this]))
 
 ;final class
-(defclass SampleClass
+(c/defclass SampleClass
   [a            :- :final            ;Object, final, public field
    aMutable                          ;Object, unsynchronized-mutable
    aArr         :- :array            ;Object array
@@ -158,17 +177,17 @@
 
   (getSelf :- SampleClass [this] this))
 
-(defclass NonPublicFieldsClass [aProtected :- [:final :protected]
-                                ;private mutable field with automatically generated setter and getter
-                                aPrivate :- [:get :set]
-                                bPrivate :- [:get :set int]
-                                cPrivate :- [:get :set String]
-                                dPrivate :- [:get :set NonPublicFieldsClass]
-                                dPrivateArr :- [:get :set :array NonPublicFieldsClass]
-                                aStaticPrivate :- [:static]
-                                bStaticPrivate :- [:static int]
-                                cStaticPrivate :- [:static String]
-                                dStaticPrivate :- [:static NonPublicFieldsClass]]
+(c/defclass NonPublicFieldsClass [aProtected :- [:final :protected]
+                                  ;private mutable field with automatically generated setter and getter
+                                  aPrivate :- [:get :set]
+                                  bPrivate :- [:get :set int]
+                                  cPrivate :- [:get :set String]
+                                  dPrivate :- [:get :set NonPublicFieldsClass]
+                                  dPrivateArr :- [:get :set :array NonPublicFieldsClass]
+                                  aStaticPrivate :- [:static]
+                                  bStaticPrivate :- [:static int]
+                                  cStaticPrivate :- [:static String]
+                                  dStaticPrivate :- [:static NonPublicFieldsClass]]
   :fields-mutability :mutable
   :fields-visibility :private
   :method-declaration-mode :declare
@@ -222,18 +241,18 @@
   (callSampleClass :- :static [x :- SampleClass] (.callFoo x))
   (callSampleClass :- :static [] (.callFoo (SampleClass.))))
 
-(defclass DefaultCtorClass [a :- [:get]
-                            b :- [:get int]
-                            c :- [:get String]
-                            d :- [:get DefaultCtorClass]
-                            aArr :- [:get :array]
-                            bArr :- [:get ints]
-                            cArr :- [:get {:array 2} String]
-                            dArr :- [:get :array DefaultCtorClass]
-                            e :- [:public :static]]
+(c/defclass DefaultCtorClass [a :- [:get]
+                              b :- [:get int]
+                              c :- [:get String]
+                              d :- [:get DefaultCtorClass]
+                              aArr :- [:get :array]
+                              bArr :- [:get ints]
+                              cArr :- [:get {:array 2} String]
+                              dArr :- [:get :array DefaultCtorClass]
+                              e :- [:public :static]]
   :fields-visibility :private)
 
-(defclass ParentClass :- :nonfinal
+(c/defclass ParentClass :- :nonfinal
   [a
    b :- :static
    c
@@ -251,8 +270,8 @@
   (protectedMethod :- :protected [this x] x)
   (protectedStaticMethod :- [:protected :static] [x] x))
 
-(defclass ChildClass [c :- :mutable
-                      d :- [:mutable :static]]
+(c/defclass ChildClass [c :- :mutable
+                        d :- [:mutable :static]]
   :method-declaration-mode :declare
 
   ParentClass
@@ -261,8 +280,8 @@
     (init-set! c c))
   (ChildClass :- :static-init [] (set! d "d"))
 
-  (bar [this] (* 2 (super-invoke this bar))) ;call bar from parent
-  (bar [this x] (* 2 (super-invoke this bar x)))
+  (bar [this] (* 2 (r/super-invoke this bar))) ;call bar from parent
+  (bar [this x] (* 2 (r/super-invoke this bar x)))
 
   ;get parent field
   (getA [this] (.a this))
@@ -271,8 +290,8 @@
   (setB [this b] (set! ParentClass/b b))
 
   ;not visible fields
-  (getCParent [this] (super-get this c))
-  (setCParent [this c] (super-set! this c (str c c)))
+  (getCParent [this] (r/super-get this c))
+  (setCParent [this c] (r/super-set! this c (str c c)))
   (getDParent [this] (ParentClass/d))
   (setDParent [this d] (set! ParentClass/d d))
 
@@ -284,30 +303,30 @@
 
   ;e won't be visible in this case when using (.e other)
   ;resort to method handles
-  (getEOther [this other :- ParentClass] (protected-get other e))
-  (setEOther [this other :- ParentClass x] (protected-set! other e x))
+  (getEOther [this other :- ParentClass] (r/protected-get other e))
+  (setEOther [this other :- ParentClass x] (r/protected-set! other e x))
   ;but it will be in this one
   (getEOther [this other :- ChildClass] (.e other))
   (setEOther [this other :- ChildClass x] (set! (.e other) x))
   ;handles should also work for current class
-  (getEOtherUsingHandle [this other :- ChildClass] (protected-get other e))
-  (setEOtherUsingHandle [this other :- ChildClass x] (protected-set! other e x))
+  (getEOtherUsingHandle [this other :- ChildClass] (r/protected-get other e))
+  (setEOtherUsingHandle [this other :- ChildClass x] (r/protected-set! other e x))
 
   ;calling protected methods and fields from parent
   (protectedParentMethod [this x] (.protectedMethod this x))
-  (protectedParentMethod [this other :- ParentClass x] (protected-invoke other protectedMethod x))
+  (protectedParentMethod [this other :- ParentClass x] (r/protected-invoke other protectedMethod x))
   (protectedParentMethod [this other :- ChildClass x] (.protectedMethod other x))
   (protectedParentStaticMethod [this x] (ParentClass/protectedStaticMethod x)))
 
-(defclass ^{Deprecated true} DeprecatedClass
+(c/defclass ^{Deprecated true} DeprecatedClass
   [^{Deprecated true} a]
   (^{Deprecated true} DeprecatedClass :- :init [this ^{Deprecated true} arg] nil)
   (^{Deprecated true} foo :- :declare [this ^{Deprecated true} arg] nil))
 
-(interface/definterface InferSigInterface
-  (foo [^String x]))
+(c/definterface InferSigInterface
+  (foo [_ x :- String]))
 
-(defclass InferMethodSig []
+(c/defclass InferMethodSig []
   :method-declaration-mode :infer
 
   InferSigInterface
@@ -315,11 +334,11 @@
   (foo [this x :- int] x) ;; this should be declared
   (foo :- :declare [this x] x)) ;; this also should be declared
 
-(defclass CustomException []
+(c/defclass CustomException []
   RuntimeException
   (CustomException :- :init [this x :- String] (super! x)))
 
-(defclass ClassWithExceptions []
+(c/defclass ClassWithExceptions []
   (ClassWithExceptions :- [:init {:throws [NullPointerException]}] [this])
   (foo :- [:declare {:throws [NullPointerException]}] [this x] x)
   (bar :- [:declare {:throws [CustomException NullPointerException]}]

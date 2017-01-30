@@ -1,4 +1,5 @@
 (ns iconoclast.defclass
+  (:refer-clojure :exclude [definterface])
   (:require [iconoclast.other.utils :as utils]
             [clojure.string :as string])
   (:import [clojure.lang IconoclastCompiler]))
@@ -202,3 +203,22 @@
        ~(emit-defclass* name (vec hinted-fields) (vec interfaces) methods opts)
         (import ~classname)
         ~classname)))
+
+(defmacro definterface [& class-spec]
+  (let [class-spec (if (= (second class-spec) :-)
+                     `(~@(take 3 class-spec) [] ~@(drop 3 class-spec))
+                     `(~(first class-spec) [] ~@(rest class-spec)))
+        [name fields & opts+specs] (utils/merge-schema-with-meta class-spec)
+        name (with-meta name (merge {:interface true :nonfinal true} (meta name)))
+        fields (map (fn [field]
+                      (with-meta field (merge {:static true} (meta field))))
+                    fields)
+        opts+specs (map (fn [x]
+                          ;; can be not enough if there are options with seqs as vals
+                          (if (seq? x)
+                            (let [[method args & _] x
+                                  method (with-meta method (merge {:abstract true :declare true} (meta method)))]
+                              `(~method ~args))
+                            x))
+                        opts+specs)]
+    `(defclass ~name ~fields ~@opts+specs)))
